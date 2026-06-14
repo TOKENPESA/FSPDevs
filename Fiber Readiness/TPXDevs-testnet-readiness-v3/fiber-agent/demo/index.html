@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FiberAgent — Mesh Wasm Harness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #58a6ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --err: #f85149;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: var(--bg);
+        color: var(--text);
+        padding: 2rem;
+      }
+      h1 { margin: 0 0 0.25rem; font-size: 1.25rem; }
+      .sub { color: var(--muted); margin-bottom: 1.5rem; font-size: 0.85rem; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      input {
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 0.5rem 0.65rem;
+        border-radius: 6px;
+        font: inherit;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1rem;
+      }
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        padding: 0.65rem 1rem;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+        margin-right: 0.5rem;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+      #status {
+        margin: 1rem 0;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        background: #0b0f14;
+        border: 1px solid var(--border);
+        font-size: 0.85rem;
+      }
+      #log {
+        height: 320px;
+        overflow-y: auto;
+        background: #010409;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        font-size: 0.78rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+      .metrics {
+        display: flex;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+        margin-top: 0.75rem;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      .metrics strong { color: var(--text); }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <h1>FiberAgent Mesh Harness</h1>
+    <p class="sub">
+      Wasm edge agent demo · open at <code>http://localhost:8787/demo/</code>
+    </p>
+
+    <div class="grid">
+      <div>
+        <label for="agent-id">Agent ID</label>
+        <input id="agent-id" type="number" value="44" min="1" max="1024" />
+      </div>
+      <div>
+        <label for="max-failures">Max failures</label>
+        <input id="max-failures" type="number" value="3" min="1" max="10" />
+      </div>
+      <div>
+        <label for="tick-ms">Tick rate (ms)</label>
+        <input id="tick-ms" type="number" value="5000" min="500" step="500" />
+      </div>
+      <div>
+        <label for="mfa-url">MFA telemetry URL</label>
+        <input id="mfa-url" type="text" value="http://127.0.0.1:1025/telemetry" />
+      </div>
+      <div>
+        <label for="mfa-ws-url">MFA WebSocket base</label>
+        <input id="mfa-ws-url" type="text" value="ws://127.0.0.1:1025" />
+      </div>
+    </div>
+
+    <div>
+      <button id="btn-start">Start mesh agent</button>
+      <button id="btn-stop" class="secondary" disabled>Stop</button>
+    </div>
+
+    <div id="status">Idle — click Start to launch the Wasm mesh heartbeat loop.</div>
+
+    <div class="metrics">
+      <span>State: <strong id="metric-state">—</strong></span>
+      <span>Active neighbors: <strong id="metric-neighbors">—</strong></span>
+      <span>Mesh peers: <strong id="metric-peers">—</strong></span>
+    </div>
+
+    <p style="margin-top:1.5rem;font-size:0.8rem;color:var(--muted)">
+      Dashboard: <a href="http://localhost:8088/" target="_blank" rel="noopener">localhost:8088</a>
+    </p>
+
+    <h2 style="font-size:0.85rem;color:var(--muted);margin-top:1.5rem">Live log</h2>
+    <div id="log"></div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

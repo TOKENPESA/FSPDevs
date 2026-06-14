@@ -1,0 +1,6 @@
+﻿# Exclude build output from semantic index (keeps @Codebase fast & accurate)
+target/
+**/target/
+node_modules/
+fiber-agent/pkg/
+*.wasm

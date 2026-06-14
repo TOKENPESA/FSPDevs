@@ -1,0 +1,198 @@
+================================================================================
+TPXDevs — DEEP INTELLIGENCE CODE AUDIT (v2 — post-hardening)
+================================================================================
+
+You are a principal security engineer + distributed systems architect.
+Perform an exhaustive, adversarial, production-readiness audit of this codebase.
+Assume this will eventually run in production edge environments, not just localhost.
+
+Upload and analyze: TPXDevs-deep-audit-v2.zip
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+
+TPXDevs is a 1024-node FiberAgent mesh network simulation with 3 tiers:
+
+TIER 1 — master-fiber-agent (Rust / Axum / Tokio)
+  Path: master-fiber-agent/src/main.rs (~538 lines)
+  Bind: 127.0.0.1:1025
+  Role: Master Fiber Agent (MFA) — mesh supervisor brain
+  APIs:
+    GET  /              — health JSON
+    POST /telemetry     — ingest ALERT_MFA_NODE_DROPPED from Wasm agents
+    POST /route         — Dijkstra multi-hop routing over live mesh graph
+    WS   /ws/:agent_id  — push MESH_CHANNEL_HOT_SWAP config to agents
+    WS   /ws/monitor    — broadcast MESH_HEAL events to dashboard
+
+TIER 2 — fiber-agent (Rust → WebAssembly via wasm-bindgen)
+  Path: fiber-agent/src/lib.rs (~278 lines)
+  Role: Edge FiberAgent — heartbeat loop, MFA escalation, WS hot-swap receiver
+  Runs in browser via fiber-agent/demo/
+
+TIER 3 — Dashboard + Demo (vanilla JS / HTML5 Canvas)
+  Paths: dashboard.js (~501 lines), index.html, fiber-agent/demo/main.js
+  Dashboard: :8088 — 32×32 lattice visualizer, WS monitor, click-to-offline (visual only)
+  Demo: :8787/demo/ — single Wasm agent harness
+
+================================================================================
+MESH TOPOLOGY (CRITICAL CONTEXT)
+================================================================================
+
+1024 agents (FA-1..FA-1024), each with exactly 3 mesh edges:
+  • Ring  — successor i+1 (wraps at 1024)
+  • Skip  — i+2 (wraps)
+  • Chord — opposite pole i+512 (wraps)
+
+Mesh healing flow:
+  1. Wasm agent detects peer failure (max_failures consecutive misses)
+  2. Agent POSTs ALERT_MFA_NODE_DROPPED to /telemetry
+  3. MFA background worker: isolate_faulty_node → pick_healing_peer
+  4. MFA sends MESH_CHANNEL_HOT_SWAP via /ws/:agent_id
+  5. Agent swaps peer_id on broken channel, returns to Active
+  6. MFA broadcasts MESH_HEAL to /ws/monitor → dashboard renders
+
+================================================================================
+RECENT HARDENING (v2 — verify these fixes are correct & complete)
+================================================================================
+
+MFA (main.rs):
+  ✓ Connection token registry: PeerRegistry = HashMap<u16, (Sender, u64)>
+    — Prevents stale WS disconnect from unregistering newer connection
+  ✓ NEXT_CONN_ID atomic counter for session tokens
+  ✓ CORS restricted to localhost:8088 and :8787
+  ✓ Request body limit 16KB
+  ✓ Telemetry validation (node IDs 1-1024, neighbor list cap 8)
+  ✓ Alert dedupe cache (2048 entries, LRU-style eviction)
+  ✓ Dijkstra with visited + cost checks (stale heap entry fix)
+  ✓ Slim tokio features, release profile opt-level=z
+
+Wasm (lib.rs):
+  ✓ active_closure field — replaces Closure::forget() leak
+  ✓ WS reconnect: close old socket, drop closure before new link
+  ✓ is_local_endpoint() — blocks non-localhost HTTP/WS URLs
+  ✓ In-place channel mutation (no per-tick clones)
+
+Dashboard (dashboard.js):
+  ✓ Float32Array node positions (memory)
+  ✓ Batched canvas strokes, dirty-flag rendering
+  ✓ Localhost-only WS monitor URL validation
+
+================================================================================
+AUDIT DIMENSIONS — ANALYZE ALL OF THE FOLLOWING
+================================================================================
+
+A. SECURITY (adversarial mindset)
+   □ Authentication/authorization — any endpoint callable without auth?
+   □ WebSocket hijacking — can attacker claim any agent_id on /ws/:id?
+   □ CORS bypass vectors — misconfiguration, preflight gaps?
+   □ JSON injection / deserialization bombs — serde untagged strings?
+   □ DoS: unbounded queues, WS flood, telemetry spam, graph lock contention?
+   □ SSRF via user-controlled URLs in Wasm (is_local_endpoint bypassable?)
+   □ XSS in dashboard innerHTML (faTooltip), event log?
+   □ Supply chain: dependencies in Cargo.toml / package.json?
+   □ Secrets/credentials/backdoors — any hidden exfiltration?
+   □ Localhost-only assumption — what breaks if bound to 0.0.0.0?
+
+B. CONCURRENCY & RACE CONDITIONS
+   □ Peer registry: token-based cleanup — any remaining TOCTOU races?
+   □ graph.read() during healing vs route calculation — deadlock/livelock?
+   □ alert_dedupe: two locks (dedupe + order) — deadlock possible?
+   □ broadcast channel lagging receivers — message loss impact?
+   □ Wasm RefCell borrow panics across async/closure boundaries?
+   □ MFA healing when agent has no active WS — silent failure path?
+
+C. LOGIC CORRECTNESS
+   □ pick_healing_peer fallback (dead+3)%1024 — correct? optimal?
+   □ isolate_faulty_node — does graph stay consistent for routing?
+   □ Dijkstra on 3-regular mesh — correct for 1024 nodes?
+   □ Agent Healing state — can it get stuck forever?
+   □ Dashboard click-offline is visual-only — document as design gap?
+   □ Chord edge formula: (i + total_nodes/2) % total_nodes + 1 — off-by-one?
+   □ MeshPulsePayload serde aliases — field confusion attacks?
+
+D. MEMORY & PERFORMANCE
+   □ CompleteMeshGraph: HashMap<u16, [MeshEdge;3]> — memory at scale?
+   □ Stack arrays [u32; 1025] in Dijkstra — stack overflow risk?
+   □ Dashboard: 1024 nodes × 3 edge layers — frame budget at 60fps?
+   □ Wasm closure + Rc<RefCell> — leak paths on reconnect loop?
+   □ TELEMETRY_QUEUE=512, BROADCAST_CAP=128 — tuning analysis?
+
+E. WASM-SPECIFIC
+   □ Closure lifetime tied to FiberAgent — sound without forget()?
+   □ WebSocket onmessage + RefCell — re-entrancy panics?
+   □ start_mesh_heartbeat_loop takes self by value — JS ownership?
+   □ CORS fetch from browser to MFA — preflight handling?
+
+F. OPERATIONAL READINESS
+   □ Error handling completeness — silent failures?
+   □ Observability — sufficient logging/metrics for production?
+   □ Graceful shutdown — missing?
+   □ Config externalization — all magic numbers hardcoded?
+   □ Test coverage — zero tests, what to add first?
+
+G. ARCHITECTURE
+   □ Single MFA SPOF — scaling path?
+   □ Healing is 1-hop swap vs /route multi-hop — consistency?
+   □ No persistent state — recovery after MFA restart?
+   □ Trust model — any agent can POST fake telemetry?
+
+================================================================================
+REQUIRED OUTPUT FORMAT
+================================================================================
+
+Structure your response EXACTLY as follows:
+
+## EXECUTIVE SUMMARY
+(3-5 sentences: overall risk level, top 3 concerns, production readiness score /10)
+
+## FINDINGS TABLE
+| ID | Severity | Category | File:Line | Finding | Exploit/Impact | Fix |
+|----|----------|----------|-----------|---------|----------------|-----|
+(CRITICAL / HIGH / MEDIUM / LOW / INFO — minimum 15 findings, aim for 25+)
+
+## ARCHITECTURE ASSESSMENT
+(Strengths, weaknesses, single points of failure, scaling limits)
+
+## CONCURRENCY DEEP DIVE
+(Race conditions, lock ordering, async pitfalls — with sequence diagrams if helpful)
+
+## SECURITY ATTACK SURFACE MAP
+(Enumerate every input vector: HTTP, WS, browser, file, config)
+
+## MEMORY PROFILE ESTIMATE
+(Per-component RAM at 1024 agents, dashboard, MFA — rough numbers)
+
+## v2 HARDENING VERDICT
+(Were the recent fixes correct? What's still missing?)
+
+## PRIORITIZED REMEDIATION ROADMAP
+Phase 1 (before any prod): ...
+Phase 2 (hardening): ...
+Phase 3 (scale): ...
+
+## RECOMMENDED TEST SUITE
+(Unit, integration, fuzz targets — specific test cases with expected behavior)
+
+## CODE PATCHES (top 5 critical/high only)
+(Provide ready-to-apply code snippets for the 5 most important fixes)
+
+================================================================================
+CONSTRAINTS FOR YOUR ANALYSIS
+================================================================================
+
+• Cite exact file paths and line numbers from the uploaded zip
+• Do NOT hallucinate files not in the bundle
+• Distinguish "acceptable for local dev sim" vs "must fix for production"
+• Challenge assumptions — think like an attacker AND a performance engineer
+• If a finding from v1 audit was fixed in v2, mark it RESOLVED and verify the fix
+
+================================================================================
+RUN COMMANDS (for reproduction)
+================================================================================
+
+  cd master-fiber-agent && cargo run     # MFA :1025
+  cd .. && npm run serve:dashboard       # Dashboard :8088
+  cd fiber-agent && npm run build:wasm && npm run serve  # Demo :8787
+
+================================================================================

@@ -1,0 +1,62 @@
+TPXDevs Deep Audit Bundle v2 — File Manifest
+Generated for Gemini intelligence audit
+============================================
+
+SOURCE FILES (application code only — no target/, pkg/, node_modules/)
+
+master-fiber-agent/
+  src/main.rs          538 lines  MFA server: mesh graph, healing, Dijkstra, WS
+  Cargo.toml            18 lines  axum 0.7, tokio, tower-http cors+limit
+
+fiber-agent/
+  src/lib.rs           278 lines  Wasm FiberAgent: heartbeat, WS, MFA alerts
+  Cargo.toml            26 lines  wasm-bindgen, gloo-timers, web-sys
+  demo/main.js         136 lines  Browser harness: mesh peers, start loop
+  demo/index.html      157 lines  Demo UI
+  package.json           9 lines  build:wasm, serve :8787
+
+dashboard (project root)/
+  dashboard.js         501 lines  Canvas visualizer, WS monitor, tooltips
+  index.html           126 lines  Dashboard UI shell
+  package.json           8 lines  serve:dashboard :8088
+
+config/
+  .gitignore            19 lines
+  .cursorignore          6 lines
+
+TOTAL: ~1,826 lines application source
+
+RECENT CHANGES (v2 vs v1 bundle):
+  + MFA: NEXT_CONN_ID + (Sender, u64) peer registry token cleanup
+  + Wasm: active_closure replaces Closure::forget()
+  + Wasm: WS reconnect closes old socket before new link
+
+EXCLUDED (not in bundle):
+  target/           Rust build artifacts
+  fiber-agent/pkg/  Generated wasm-pack output
+  node_modules/     npm deps
+  *.wasm            Compiled binaries
+
+ARCHITECTURE DIAGRAM:
+
+  [Browser Demo :8787]          [Dashboard :8088]
+       |  Wasm FiberAgent              |  dashboard.js
+       |  HTTP POST /telemetry         |  WS /ws/monitor
+       |  WS /ws/:agent_id              |
+       +----------+--------------------+
+                  |
+            [MFA :1025]
+            master-fiber-agent
+            CompleteMeshGraph (1024 nodes × 3 edges)
+            background_processor_worker
+            Dijkstra /route
+
+MESH EDGE FORMULAS (per node i, N=1024):
+  ring  = (i == N) ? 1 : i+1
+  skip  = (i >= N-1) ? 1 : i+2
+  chord = (i + N/2) % N + 1
+
+KEY CONSTANTS:
+  RING_SIZE=1024, MAX_BODY_BYTES=16KB, TELEMETRY_QUEUE=512
+  PEER_TX_CAP=16, BROADCAST_CAP=128, DEDUPE_CAP=2048
+  CHANNEL_LIQUIDITY=10_000_000_000_000

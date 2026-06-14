@@ -1,0 +1,9 @@
+{
+  "name": "fiber-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasm": "wasm-pack build --target web --out-dir pkg",
+    "serve": "npx --yes serve . -p 8787 --no-port-switching"
+  }
+}

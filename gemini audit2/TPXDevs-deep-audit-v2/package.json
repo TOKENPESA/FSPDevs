@@ -1,0 +1,8 @@
+{
+  "name": "tpxdevs-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve:dashboard": "npx --yes serve . -p 8088 --no-port-switching"
+  }
+}

@@ -1,0 +1,19 @@
+# Build artifacts
+target/
+**/target/
+
+# Generated Wasm package (rebuild with wasm-pack)
+fiber-agent/pkg/
+
+# Dependencies
+node_modules/
+
+# Binaries
+*.wasm
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Cursor local cache (not source)
+.cursor/

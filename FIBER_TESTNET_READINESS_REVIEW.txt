@@ -1,0 +1,351 @@
+================================================================================
+TPXDevs — FIBER NETWORK TESTNET READINESS REVIEW
+For Gemini Deep Analysis · v3 · June 2026
+================================================================================
+
+Upload bundle: TPXDevs-testnet-readiness-v3.zip
+Companion: CODEBASE_MANIFEST.txt (architecture map inside zip)
+
+YOUR ROLE:
+You are a Principal Blockchain Infrastructure Architect specializing in:
+- Nervos CKB / Fiber Network (FNN) payment channels
+- Distributed mesh routing & fault tolerance
+- Production security & testnet deployment gates
+
+Produce an honest status assessment, gap analysis, and a benchmark scorecard
+with PASS/FAIL/PARTIAL for each gate required before TPXDevs can integrate
+with the official Fiber Network Testnet (https://www.fiber.world).
+
+================================================================================
+EXECUTIVE SUMMARY (PRE-AUDIT — TEAM SELF-ASSESSMENT)
+================================================================================
+
+Project:     TPXDevs / FiberAgent Mesh Simulation
+Phase:       Phase 2 complete (local simulation) · Phase 3 NOT started (chain)
+Readiness:   ~25% toward Fiber Testnet integration
+Type:        Control-plane PROTOTYPE — NOT a Fiber Network Node (FNN)
+
+What we HAVE built:
+  ✓ 1024-node mesh topology model (ring + skip + chord)
+  ✓ Master Fiber Agent (MFA) supervisor — Rust/Axum on :1025
+  ✓ Mesh healing loop (detect → isolate → hot-swap → dashboard notify)
+  ✓ Dijkstra multi-hop route calculator (/route API)
+  ✓ Wasm edge agent (browser) with heartbeat + MFA escalation
+  ✓ Real-time dashboard visualizer (32×32 canvas, heal events, route simulator)
+  ✓ Localhost security hardening (CORS, origin check, dedupe, conn tokens)
+
+What we have NOT built (critical for testnet):
+  ✗ Real Fiber Network Node (fnn binary) integration
+  ✗ CKB on-chain funding / channel open / close
+  ✗ Real payment channel state (HTLC, commitment transactions)
+  ✗ Cryptographic node identity (keys, lock_arg, peer_id)
+  ✗ Real inter-node liveness (currently Math.random() simulation)
+  ✗ 1024 concurrent running agents (only 1 Wasm demo + visualized grid)
+  ✗ Testnet config.yml, faucet funding, public node peering
+  ✗ Persistence / crash recovery
+  ✗ Automated tests (0 tests in repo)
+  ✗ Production deployment (Docker, TLS, auth, monitoring)
+
+================================================================================
+CURRENT ARCHITECTURE (WHAT EXISTS TODAY)
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         LOCALHOST SIMULATION STACK                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  [Browser :8787/demo]          [Dashboard :8088]                       │
+│   Wasm FiberAgent                 dashboard.js                           │
+│   · random peer health            · 1024-node visualizer                 │
+│   · POST /telemetry               · WS /ws/monitor                       │
+│   · WS /ws/:id                    · POST /route (route simulator)      │
+│         │                                │                               │
+│         └────────────┬───────────────────┘                               │
+│                      ▼                                                   │
+│            [MFA :1025 — master-fiber-agent]                              │
+│             · CompleteMeshGraph (in-memory)                              │
+│             · Dijkstra routing                                           │
+│             · Healing worker + WS command push                           │
+│             · NO blockchain connection                                   │
+│                                                                          │
+│  ═══════════════════════════════════════════════════════════════════    │
+│  MISSING LAYER (required for Fiber Testnet):                             │
+│                                                                          │
+│            [FNN — Fiber Network Node]                                    │
+│             · fnn binary (nervosnetwork/fiber)                         │
+│             · config/testnet/config.yml                                  │
+│             · CKB key (ckb-cli account)                                 │
+│             · Channel open/close, send_payment, invoice                  │
+│             · Real shannon liquidity on testnet                         │
+│                                                                          │
+│            [CKB Testnet L1]                                            │
+│             · Faucet CKB + RUSD                                         │
+│             · On-chain channel funding                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+COMPONENT STATUS MATRIX
+================================================================================
+
+| Component              | Status      | Testnet Blocker? | Notes |
+|------------------------|-------------|------------------|-------|
+| Mesh graph model       | DONE        | No               | Ring/skip/chord unified across MFA/dashboard/demo |
+| Dijkstra routing       | DONE        | No               | Must align with FNN routing semantics later |
+| Mesh healing (1-hop)   | DONE        | Partial          | Logic exists; not tied to real channel state |
+| MFA HTTP/WS API        | DONE        | Partial          | Custom API, not FNN RPC |
+| Wasm FiberAgent        | PROTOTYPE   | YES              | Browser-only, simulated failures |
+| Dashboard visualizer   | DONE        | No               | Dev/monitoring tool |
+| Route simulator UI     | DONE        | No               | Calls MFA /route only |
+| Connection token WS    | DONE        | No               | Stale disconnect fix |
+| WS Origin validation   | DONE        | Partial          | Agent WS only; monitor WS open |
+| Closure lifecycle      | DONE        | No               | Wasm memory fix |
+| Real peer heartbeats   | NOT STARTED | YES              | Math.random() placeholder |
+| FNN node deployment    | NOT STARTED | YES              | Need fnn + testnet config |
+| CKB wallet/keys        | NOT STARTED | YES              | ckb-cli account required |
+| Channel funding        | NOT STARTED | YES              | open_channel API |
+| send_payment           | NOT STARTED | YES              | Real asset transfer |
+| Multi-agent runtime    | NOT STARTED | YES              | 1 browser agent today |
+| Auth/TLS               | NOT STARTED | YES (prod)       | OK for local dev |
+| Tests                  | NOT STARTED | YES              | 0 unit/integration tests |
+| CI/CD                  | NOT STARTED | YES              | No pipeline |
+| Persistence            | NOT STARTED | YES              | In-memory only |
+| Observability          | NOT STARTED | Partial          | println/console only |
+
+================================================================================
+FIBER NETWORK TESTNET — OFFICIAL REQUIREMENTS (REFERENCE)
+================================================================================
+
+Source: https://www.fiber.world/docs/quick-start/run-a-node
+        https://github.com/nervosnetwork/fiber
+
+To run on Fiber Testnet, a team must:
+
+  1. Deploy FNN (Fiber Network Node) binary
+     - Download from GitHub releases OR cargo build --release
+     - Copy config/testnet/config.yml
+     - Create data directory with ckb/key (private key via ckb-cli)
+
+  2. Fund testnet account
+     - CKB faucet for native CKB
+     - RUSD via JoyID wallet faucet (for UDT channels)
+
+  3. Start node
+     - FIBER_SECRET_KEY_PASSWORD env var (encrypt wallet)
+     - RUST_LOG=info ./fnn -c config.yml -d .
+
+  4. Connect to public testnet peers
+     - open_channel with public nodes (min ~438-500 CKB)
+     - Wait for CHANNEL_READY state
+     - send_payment for actual transfers
+
+  5. Version compatibility
+     - Close channels before FNN upgrades (storage format changes)
+     - Use fnn-migrate for DB upgrades
+
+TPXDevs currently implements NONE of steps 1-4. Our MFA is a parallel
+simulation layer, not an FNN wrapper or plugin.
+
+================================================================================
+BENCHMARK SCORECARD — GATES TO FIBER TESTNET UPLOAD
+================================================================================
+
+Rate each gate: PASS | PARTIAL | FAIL | NOT APPLICABLE
+Gemini: re-score after analyzing the zip, add evidence (file:line).
+
+── GATE A: FOUNDATION (Simulation Control Plane) ──────────────────────────
+
+| ID  | Benchmark                              | Target              | Current Est. |
+|-----|----------------------------------------|---------------------|--------------|
+| A1  | Mesh topology correctness              | 1024 nodes × 3 edges| PARTIAL      |
+| A2  | Route computation (Dijkstra)           | <50ms @ 1024 nodes  | PASS (local) |
+| A3  | Healing loop end-to-end                | detect→heal→confirm | PARTIAL      |
+| A4  | Dashboard real-time telemetry          | WS heal events      | PASS         |
+| A5  | Route simulator UI                     | POST /route visual  | PASS         |
+| A6  | Cross-component formula alignment      | chord/ring/skip     | PASS (v3)    |
+| A7  | Security hardening (localhost)         | CORS, origin, dedupe| PARTIAL      |
+| A8  | Unit + integration tests               | >80% critical paths | FAIL (0%)    |
+
+── GATE B: FIBER NETWORK INTEGRATION (Testnet Blockers) ───────────────────
+
+| ID  | Benchmark                              | Target              | Current Est. |
+|-----|----------------------------------------|---------------------|--------------|
+| B1  | FNN node running on testnet              | CHANNEL_READY       | FAIL         |
+| B2  | CKB testnet account + funded wallet     | ≥10,000 CKB         | FAIL         |
+| B3  | Open channel with public testnet peer   | ≥500 CKB channel    | FAIL         |
+| B4  | send_payment testnet transfer           | Successful payment  | FAIL         |
+| B5  | UDT/RUSD channel (optional)             | UDT send_payment    | FAIL         |
+| B6  | MFA ↔ FNN bridge layer                  | Route sync / events | FAIL         |
+| B7  | Real channel liquidity in route calc    | Actual balances     | FAIL         |
+| B8  | HTLC / payment hash workflow            | Per Fiber spec      | FAIL         |
+
+── GATE C: AGENT RUNTIME (Swarm Scale) ────────────────────────────────────
+
+| ID  | Benchmark                              | Target              | Current Est. |
+|-----|----------------------------------------|---------------------|--------------|
+| C1  | Real peer liveness detection            | No random() mock    | FAIL         |
+| C2  | Concurrent agents running               | ≥64 (path to 1024)  | FAIL (1)     |
+| C3  | Agent cryptographic identity            | Keypair per FA      | FAIL         |
+| C4  | Non-browser agent runtime               | Native/Rust/Node    | FAIL         |
+| C5  | Heartbeat latency (t_echo)              | ≤5s configurable    | PASS (config)|
+| C6  | Failure detection accuracy              | <1% false positive  | FAIL (5% random)|
+| C7  | Healing success rate (healthy mesh)     | >99% delivery       | UNTESTED     |
+
+── GATE D: PRODUCTION & OPERATIONS ────────────────────────────────────────
+
+| ID  | Benchmark                              | Target              | Current Est. |
+|-----|----------------------------------------|---------------------|--------------|
+| D1  | Authentication on all APIs              | JWT/mTLS/signed     | FAIL         |
+| D2  | TLS / WSS everywhere                    | Required for prod   | FAIL         |
+| D3  | Persistent graph + channel state        | SQLite/Redis        | FAIL         |
+| D4  | Structured logging + metrics            | Prometheus/tracing  | FAIL         |
+| D5  | Docker + deploy manifest                | Reproducible deploy | FAIL         |
+| D6  | CI pipeline (build, test, lint)         | GitHub Actions      | FAIL         |
+| D7  | Load test: 1024 nodes, 100 routes/sec   | p99 <200ms          | UNTESTED     |
+| D8  | Graceful shutdown + recovery            | No state loss       | FAIL         |
+| D9  | Rate limiting / abuse protection        | Per-IP/token        | FAIL         |
+| D10 | Security audit (3rd party)              | No critical findings| NOT DONE     |
+
+── GATE E: DOCUMENTATION & COMPLIANCE ─────────────────────────────────────
+
+| ID  | Benchmark                              | Target              | Current Est. |
+|-----|----------------------------------------|---------------------|--------------|
+| E1  | README with architecture + runbook      | Complete            | FAIL         |
+| E2  | API documentation (OpenAPI)             | All MFA endpoints   | FAIL         |
+| E3  | Fiber testnet integration guide         | Step-by-step        | FAIL         |
+| E4  | Threat model document                   | STRIDE analysis     | FAIL         |
+| E5  | Testnet submission checklist            | Signed off          | THIS DOC     |
+
+================================================================================
+RECOMMENDED PHASE ROADMAP TO TESTNET
+================================================================================
+
+PHASE 3 — Fiber Testnet Foundation (4-6 weeks est.)
+  □ Deploy local FNN with testnet config.yml
+  □ Fund CKB via testnet faucet
+  □ Open channel with public testnet node
+  □ Execute first send_payment on testnet
+  □ Document FNN RPC mapping vs MFA API
+
+PHASE 4 — MFA ↔ FNN Bridge (3-4 weeks est.)
+  □ Replace simulated liquidity with real channel balances
+  □ Sync MFA graph from FNN channel graph
+  □ Route /route through FNN send_payment dry-run or quote API
+  □ Wire healing to real channel force-close / re-route semantics
+
+PHASE 5 — Real Agent Runtime (4-6 weeks est.)
+  □ Replace Math.random() with real heartbeat protocol
+  □ Native Rust agents (not browser Wasm) for server deployment
+  □ Agent auth (signed telemetry payloads)
+  □ Scale test: 64 → 256 → 1024 agents
+
+PHASE 6 — Testnet Upload Gate (2-3 weeks est.)
+  □ Full integration test suite
+  □ Load benchmarks (Gate D7)
+  □ Security audit
+  □ Docker deployment to testnet VPS
+  □ Public testnet peering + monitoring dashboard
+
+ESTIMATED TOTAL: 13-19 weeks to testnet-ready (team-dependent)
+
+================================================================================
+IMMEDIATE NEXT 10 ACTIONS (PRIORITIZED)
+================================================================================
+
+ 1. [CRITICAL] Deploy FNN testnet node per fiber.world docs
+ 2. [CRITICAL] Fund wallet + open channel with public peer
+ 3. [CRITICAL] Complete first testnet send_payment
+ 4. [HIGH]     Add Rust unit tests: Dijkstra, healing, validation
+ 5. [HIGH]     Replace Math.random() peer check with real protocol stub
+ 6. [HIGH]     Design MFA ↔ FNN adapter interface (trait/module)
+ 7. [MEDIUM]   Add integration test: full heal flow (HTTP + WS)
+ 8. [MEDIUM]   Persist graph state to SQLite
+ 9. [MEDIUM]   Add README + architecture diagram
+10. [LOW]      Docker-compose for MFA + dashboard + FNN
+
+================================================================================
+GEMINI — REQUIRED OUTPUT FORMAT
+================================================================================
+
+After analyzing TPXDevs-testnet-readiness-v3.zip, produce:
+
+## 1. WHERE WE ARE (Executive Status)
+   - Current phase (1-6 from roadmap above)
+   - Overall testnet readiness % (0-100) with justification
+   - Top 5 strengths
+   - Top 5 blockers
+
+## 2. BENCHMARK SCORECARD (Re-scored)
+   Re-evaluate every gate A1-E5 as PASS/PARTIAL/FAIL with file evidence.
+   Include an overall gate summary:
+   - Gate A (Foundation):  X/Y passed
+   - Gate B (Fiber Integration): X/Y passed
+   - Gate C (Agent Runtime): X/Y passed
+   - Gate D (Production): X/Y passed
+   - Gate E (Documentation): X/Y passed
+
+## 3. GAP ANALYSIS
+   For each FAIL gate: root cause, effort estimate (S/M/L/XL), dependency
+
+## 4. ARCHITECTURE RECOMMENDATION
+   How should MFA relate to FNN?
+   Options:
+   (a) MFA as sidecar to FNN
+   (b) MFA replaces custom routing inside FNN
+   (c) MFA as independent orchestrator above multiple FNN nodes
+   Recommend one with rationale.
+
+## 5. TESTNET SUBMISSION CHECKLIST
+   Exact steps to go from current state → first testnet payment
+   with estimated timeline.
+
+## 6. RISK REGISTER
+   | Risk | Likelihood | Impact | Mitigation |
+
+## 7. QUICK WINS (implementable in <1 week)
+
+## 8. CODE QUALITY VERDICT
+   Review latest hardening:
+   - Connection token registry (main.rs)
+   - active_closure lifecycle (lib.rs)
+   - WS Origin check
+   - try_send healing delivery
+   - Chord formula alignment (dashboard.js)
+   - Transaction route simulator
+   - Monitor lag handling (SYS_LAG)
+
+================================================================================
+SOURCE FILES IN BUNDLE (v3)
+================================================================================
+
+master-fiber-agent/src/main.rs   ~588 lines  (MFA — latest hardening)
+fiber-agent/src/lib.rs           ~280 lines  (Wasm agent — closure + URL parse)
+dashboard.js                     ~611 lines  (visualizer + route simulator)
+index.html                       ~142 lines  (dashboard + transaction UI)
+fiber-agent/demo/*               demo harness
+Cargo.toml / package.json        dependencies
+
+Recent changes in v3 (since v2 audit bundle):
+  + WS Origin validation on /ws/:agent_id
+  + try_send healing (no false dashboard heals)
+  + Monitor WS lag handling (SYS_LAG events)
+  + is_local_endpoint via web_sys::Url parser
+  + Chord formula aligned with MFA backend
+  + Transaction Route Simulator (POST /route + canvas path)
+  + Connection token peer registry
+
+================================================================================
+RUN COMMANDS
+================================================================================
+
+  cd master-fiber-agent && cargo run          # MFA :1025
+  cd .. && npm run serve:dashboard            # Dashboard :8088
+  cd fiber-agent && npm run build:wasm && npm run serve  # Demo :8787
+
+UI Links:
+  Dashboard:  http://localhost:8088/
+  Wasm demo:  http://localhost:8787/demo/
+  MFA health: http://127.0.0.1:1025/
+
+================================================================================
+END OF REVIEW REQUEST
+================================================================================

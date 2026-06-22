@@ -1,0 +1,151 @@
+================================================================================
+TPXDevs — FIBER ECOSYSTEM BEST-IN-CLASS BENCHMARK (v5 · June 2026)
+================================================================================
+
+Purpose: Seed document for Gemini deep audit. Defines what "best in the Fiber
+Network ecosystem" means and where TPXDevs stands today vs target state.
+
+Reference ecosystem:
+  • https://www.fiber.world — official Fiber Network testnet
+  • https://github.com/nervosnetwork/fiber — FNN source (fiber-lib payment router)
+  • CKB testnet — underlying L1 for channel funding
+  • Community: fnn-cli, open_channel tooling, public peer directories
+
+================================================================================
+WHAT "BEST-IN-CLASS" MEANS FOR A FIBER MESH CONTROL PLANE
+================================================================================
+
+A best-in-class Fiber mesh solution is NOT just a wrapper around fnn.exe.
+It is the operational layer the ecosystem lacks today:
+
+  1. FLEET ORCHESTRATION
+     Run N Fiber nodes + sidecars with deterministic identity, ports, and
+     health — from 1 edge node to 1024 simulated agents on one operator machine
+     or distributed across K8s/bare metal.
+
+  2. UNIFIED OBSERVABILITY
+     Single pane: channel liquidity, payment flows, heal events, routing paths,
+     CKB funding status — real-time WebSocket + historical query.
+
+  3. INTELLIGENT ROUTING LAYER
+     Control plane that understands topology AND live channel capacity;
+     recommends paths; triggers liquidity moves before payments fail.
+
+  4. PRODUCTION SECURITY
+     Signed agent telemetry, mTLS or token auth, no dev keys in prod,
+     audit trail for channel open/fund/payment operations.
+
+  5. TESTNET → MAINNET PARITY
+     Same APIs and dashboards against sim, local FNN, fiber.world peers.
+
+================================================================================
+TPXDevs CURRENT POSITION (v5 post-refactor)
+================================================================================
+
+STRENGTHS (differentiators today):
+  ✓ 1024-node synthetic mesh with ring/skip/chord — unique scale story
+  ✓ MFA supervisor: heal, route, hub liquidity, signed telemetry
+  ✓ mesh-core shared library — clean split for ecosystem SDK potential
+  ✓ mesh-fleet binary — one process, many FAs (ops innovation)
+  ✓ Dashboard: live mesh viz, payments UI, liquidity events, edge-node slider
+  ✓ Sidecar SQLite: offline telemetry, channel cache, tx ledger
+  ✓ Local FNN bridge: list_channels, open_channel, keysend payments
+
+WEAKNESSES (vs best-in-class):
+  ✗ MFA graph not synced from real FNN/gossip
+  ✗ Payments: single-hop keysend only — no multi-hop via fiber-lib router
+  ✗ No funded public testnet channels documented end-to-end
+  ✗ Dev deterministic keys — no HSM/vault integration
+  ✗ No metrics (Prometheus), tracing (OpenTelemetry), or alert routing
+  ✗ No HA: MFA single process, in-memory graph
+  ✗ No public API docs / OpenAPI for third-party integrators
+  ✗ Wasm path deprecated without replacement for browser-only demos
+
+ESTIMATED ECOSYSTEM READINESS: ~50% (control plane strong, settlement weak)
+
+================================================================================
+BENCHMARK SCORECARD TEMPLATE (for Gemini to fill)
+================================================================================
+
+| Dimension                    | Score /10 | Notes |
+|------------------------------|-----------|-------|
+| Control-plane architecture   |           |       |
+| FNN integration depth        |           |       |
+| Payment correctness          |           |       |
+| Fleet scale (1024)           |           |       |
+| Security posture             |           |       |
+| Observability & ops          |           |       |
+| Developer experience         |           |       |
+| Testnet production readiness |           |       |
+| Ecosystem differentiation    |           |       |
+
+Target for "best-in-class": ≥8 on all dimensions except differentiation (≥9).
+
+================================================================================
+90-DAY ROADMAP SEED (Gemini should refine with file-level tasks)
+================================================================================
+
+PHASE A — TESTNET MVP (weeks 1–4)
+  A1. Verify open_channel against live FNN v0.8.x; fix param mismatches
+  A2. Fund CKB testnet wallet; open channel with public fiber.world peer
+  A3. Multi-hop send_payment: delegate to FNN router OR replicate path in MFA
+  A4. Sync MFA edge capacities from list_channels poll (per fleet agent)
+  A5. E2E test: dashboard route → MFA → sidecar → FNN → settlement
+
+PHASE B — PRODUCTION HARDENING (weeks 5–8)
+  B1. MFA persistence: graph snapshot + peer registry (SQLite or Redis)
+  B2. TLS termination, rotate MFA_AGENT_WS_TOKEN, restrict CORS for prod
+  B3. Structured logging + Prometheus metrics (/metrics on MFA)
+  B4. CI: cargo test/clippy, dashboard node --check, smoke spawn-mesh-fleet -To 8
+  B5. Key management: env/file keystore; remove dev keys from mesh-pubkeys prod path
+
+PHASE C — ECOSYSTEM LEADERSHIP (weeks 9–12)
+  C1. OpenAPI spec for MFA HTTP/WS events — third-party dashboard plugins
+  C2. mesh-core published as crates.io lib for Fiber fleet builders
+  C3. Multi-hub topology: several FNN hubs, cross-hub routing hints
+  C4. Liquidity automation: rebalance policies, invoice support, fee estimator
+  C5. Public demo: one-click fiber.world peering guide + recorded walkthrough
+
+================================================================================
+KILLER FEATURE CANDIDATES (implementation anchors)
+================================================================================
+
+  1. LIVE GRAPH SYNC
+     Extend master-fiber-agent/src/graph.rs to merge FNN list_channels into
+     CompleteMeshGraph capacities; invalidate Dijkstra cache on heartbeat.
+
+  2. PAYMENT ORCHESTRATION
+     master-fiber-agent/src/payment.rs + fiber-agent/src/payment.rs:
+     multi-hop path from MFA Dijkstra → per-hop keysend or FNN send_payment RPC.
+
+  3. MESH FLEET AS A SERVICE
+     fnn-testnet/spawn-mesh-fleet.ps1 → Rust/K8s operator using mesh_ports.rs
+     port allocation logic; health CRD per FA.
+
+  4. LIQUIDITY COPILOT
+     dashboard/events/liquidity.js + hub.rs: predict depletion from route sim,
+     pre-emptive hub funding before ALERT_BALANCE_DEPLETED.
+
+  5. FIBER OPS DASHBOARD STANDARD
+     Export dashboard/ as embeddable @tpxdevs/fiber-dashboard npm package;
+     MFA /ws/monitor as stable event schema versioned in mesh-core/types.rs.
+
+================================================================================
+ANTI-PATTERNS (do not ship to testnet)
+================================================================================
+
+  • Treating MFA synthetic graph as source of truth for real payments
+  • sim-peer-* or Math.random() health in any prod code path
+  • Silent broadcast/UI event drops (fixed in v5 — verify no regressions)
+  • Single shared FNN hub for 1024 agents without channel isolation plan
+  • keysend-only payments presented as "full Fiber routing"
+
+================================================================================
+GEMINI INSTRUCTION
+================================================================================
+
+Use this document as benchmark input. Cross-check every claim against the zip.
+Produce an honest scorecard, gap list, and prioritized roadmap with file:line
+anchors. Recommend what to build, defer, or delete to maximize ecosystem impact.
+
+================================================================================

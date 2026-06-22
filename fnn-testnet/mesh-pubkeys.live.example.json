@@ -1,0 +1,5 @@
+{
+  "_comment": "Live testnet: map FA mesh IDs to real Fiber secp256k1 pubkeys. Copy to mesh-pubkeys.json and set MESH_PUBKEY_REGISTRY_PATH for MFA.",
+  "_comment2": "FA-45 below is public testnet relay node1 — use for dashboard Route & Pay when only FA-44 sidecar is running.",
+  "45": "02b6d4e3ab86a2ca2fad6fae0ecb2e1e559e0b911939872a90abdda6d20302be71"
+}

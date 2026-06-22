@@ -1,0 +1,25 @@
+================================================================================
+TPXDevs — ARCHIVED SNAPSHOT DIRECTORIES (read-only reference)
+================================================================================
+
+These folders are frozen copies from earlier audits. They are NOT the live
+source of truth. Always edit and run from the repo root paths below.
+
+  gemin audit/TPXDevs-audit-bundle/       v1 audit snapshot
+  gemini audit2/TPXDevs-deep-audit-v2/    v2 deep audit snapshot
+  Fiber Readiness/TPXDevs-testnet-readiness-v3/  v3 readiness bundle
+
+Live application code:
+  mesh-core/            (shared workspace crate)
+  master-fiber-agent/
+  fiber-agent/          (sidecar + mesh-fleet binary)
+  dashboard/            (ES modules), index.html, package.json
+  fnn-testnet/          (local FNN runtime scripts)
+
+Current audit upload bundle:
+  TPXDevs-code-audit-v5.zip   (run bundle-gemini-audit.ps1 from repo root)
+  TPXDevs-code-audit-v4/      (frozen v4 snapshot — reference only)
+
+Canonical docs: SIMULATION_BASE.txt, CODEBASE_MANIFEST.txt
+
+================================================================================

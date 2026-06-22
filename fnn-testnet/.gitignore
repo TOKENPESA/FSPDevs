@@ -1,0 +1,6 @@
+data/
+*.log
+mesh-pubkeys.json
+nodes/
+*.exe
+*.tar.gz

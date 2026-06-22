@@ -1,198 +1,304 @@
 ================================================================================
-TPXDevs — DEEP INTELLIGENCE CODE AUDIT (v2 — post-hardening)
+TPXDevs — DEEP CODE AUDIT FOR GEMINI (v5.0 · Post-Refactor · June 2026)
 ================================================================================
 
-You are a principal security engineer + distributed systems architect.
-Perform an exhaustive, adversarial, production-readiness audit of this codebase.
-Assume this will eventually run in production edge environments, not just localhost.
+UPLOAD TO GEMINI (2.5 Pro or Advanced with 1M context recommended):
+  1. GEMINI_DEEP_AUDIT_PROMPT.txt   (this file — paste as your system/user prompt)
+  2. TPXDevs-code-audit-v5.zip      (source bundle — run bundle-gemini-audit.ps1)
 
-Upload and analyze: TPXDevs-deep-audit-v2.zip
-
-================================================================================
-PROJECT OVERVIEW
-================================================================================
-
-TPXDevs is a 1024-node FiberAgent mesh network simulation with 3 tiers:
-
-TIER 1 — master-fiber-agent (Rust / Axum / Tokio)
-  Path: master-fiber-agent/src/main.rs (~538 lines)
-  Bind: 127.0.0.1:1025
-  Role: Master Fiber Agent (MFA) — mesh supervisor brain
-  APIs:
-    GET  /              — health JSON
-    POST /telemetry     — ingest ALERT_MFA_NODE_DROPPED from Wasm agents
-    POST /route         — Dijkstra multi-hop routing over live mesh graph
-    WS   /ws/:agent_id  — push MESH_CHANNEL_HOT_SWAP config to agents
-    WS   /ws/monitor    — broadcast MESH_HEAL events to dashboard
-
-TIER 2 — fiber-agent (Rust → WebAssembly via wasm-bindgen)
-  Path: fiber-agent/src/lib.rs (~278 lines)
-  Role: Edge FiberAgent — heartbeat loop, MFA escalation, WS hot-swap receiver
-  Runs in browser via fiber-agent/demo/
-
-TIER 3 — Dashboard + Demo (vanilla JS / HTML5 Canvas)
-  Paths: dashboard.js (~501 lines), index.html, fiber-agent/demo/main.js
-  Dashboard: :8088 — 32×32 lattice visualizer, WS monitor, click-to-offline (visual only)
-  Demo: :8787/demo/ — single Wasm agent harness
+OPTIONAL CONTEXT (upload if token budget allows):
+  FIBER_ECOSYSTEM_BEST_IN_CLASS.txt   — benchmark targets + roadmap seed
+  FIBER_TESTNET_READINESS_REVIEW.txt    — prior gate scorecard (update after audit)
+  SIMULATION_BASE.txt                   — runbook (partially stale pre-v5; trust zip)
 
 ================================================================================
-MESH TOPOLOGY (CRITICAL CONTEXT)
+YOUR ROLE
 ================================================================================
 
-1024 agents (FA-1..FA-1024), each with exactly 3 mesh edges:
-  • Ring  — successor i+1 (wraps at 1024)
-  • Skip  — i+2 (wraps)
-  • Chord — opposite pole i+512 (wraps)
+You are a principal security engineer, distributed systems architect, and
+Nervos CKB / Fiber Network (FNN) infrastructure specialist.
 
-Mesh healing flow:
-  1. Wasm agent detects peer failure (max_failures consecutive misses)
-  2. Agent POSTs ALERT_MFA_NODE_DROPPED to /telemetry
-  3. MFA background worker: isolate_faulty_node → pick_healing_peer
-  4. MFA sends MESH_CHANNEL_HOT_SWAP via /ws/:agent_id
-  5. Agent swaps peer_id on broken channel, returns to Active
-  6. MFA broadcasts MESH_HEAL to /ws/monitor → dashboard renders
+Perform an exhaustive, adversarial, production-readiness audit of TPXDevs —
+a 1024-node Fiber Agent mesh control plane with MFA supervisor, native
+sidecar fleet, dashboard, and local FNN JSON-RPC bridge.
 
-================================================================================
-RECENT HARDENING (v2 — verify these fixes are correct & complete)
-================================================================================
+Your second mandate: benchmark TPXDevs against the Fiber Network ecosystem
+(fiber.world, nervosnetwork/fiber, community LN-style tooling) and produce a
+concrete roadmap to make this the BEST-IN-CLASS mesh operations + observability
+solution — not merely "testnet ready."
 
-MFA (main.rs):
-  ✓ Connection token registry: PeerRegistry = HashMap<u16, (Sender, u64)>
-    — Prevents stale WS disconnect from unregistering newer connection
-  ✓ NEXT_CONN_ID atomic counter for session tokens
-  ✓ CORS restricted to localhost:8088 and :8787
-  ✓ Request body limit 16KB
-  ✓ Telemetry validation (node IDs 1-1024, neighbor list cap 8)
-  ✓ Alert dedupe cache (2048 entries, LRU-style eviction)
-  ✓ Dijkstra with visited + cost checks (stale heap entry fix)
-  ✓ Slim tokio features, release profile opt-level=z
-
-Wasm (lib.rs):
-  ✓ active_closure field — replaces Closure::forget() leak
-  ✓ WS reconnect: close old socket, drop closure before new link
-  ✓ is_local_endpoint() — blocks non-localhost HTTP/WS URLs
-  ✓ In-place channel mutation (no per-tick clones)
-
-Dashboard (dashboard.js):
-  ✓ Float32Array node positions (memory)
-  ✓ Batched canvas strokes, dirty-flag rendering
-  ✓ Localhost-only WS monitor URL validation
+Assume eventual deployment on Fiber testnet edge nodes, not only localhost.
 
 ================================================================================
-AUDIT DIMENSIONS — ANALYZE ALL OF THE FOLLOWING
+WHAT IS IN THE ZIP (v5 bundle)
 ================================================================================
 
-A. SECURITY (adversarial mindset)
-   □ Authentication/authorization — any endpoint callable without auth?
-   □ WebSocket hijacking — can attacker claim any agent_id on /ws/:id?
-   □ CORS bypass vectors — misconfiguration, preflight gaps?
-   □ JSON injection / deserialization bombs — serde untagged strings?
-   □ DoS: unbounded queues, WS flood, telemetry spam, graph lock contention?
-   □ SSRF via user-controlled URLs in Wasm (is_local_endpoint bypassable?)
-   □ XSS in dashboard innerHTML (faTooltip), event log?
-   □ Supply chain: dependencies in Cargo.toml / package.json?
-   □ Secrets/credentials/backdoors — any hidden exfiltration?
-   □ Localhost-only assumption — what breaks if bound to 0.0.0.0?
+WORKSPACE (Cargo workspace — root Cargo.toml):
+  mesh-core/                       Shared crate (SOLID Phase 0)
+    src/constants.rs               RING_SIZE, ports, defaults
+    src/types.rs                   MeshPulsePayload
+    src/topology.rs                ring/skip/chord, telemetry canonical msg
+    src/pubkey.rs                  agent_fnn_pubkey, secp256k1 dev keys
+    src/registry.rs                MeshPubkeyRegistry, merge_registry_json
+    src/error.rs                   MeshError (thiserror)
+    9 unit tests
 
-B. CONCURRENCY & RACE CONDITIONS
-   □ Peer registry: token-based cleanup — any remaining TOCTOU races?
-   □ graph.read() during healing vs route calculation — deadlock/livelock?
-   □ alert_dedupe: two locks (dedupe + order) — deadlock possible?
-   □ broadcast channel lagging receivers — message loss impact?
-   □ Wasm RefCell borrow panics across async/closure boundaries?
-   □ MFA healing when agent has no active WS — silent failure path?
+  master-fiber-agent/              MFA supervisor (SOLID Phase 1 split)
+    src/main.rs                    ~125 lines bootstrap only
+    src/config.rs                  env, CORS, sim payments flag
+    src/types.rs                   route/payment/simulation DTOs
+    src/graph.rs                   CompleteMeshGraph, Dijkstra, 3 tests
+    src/state.rs                   AppState, HubConfig, registry load
+    src/hub.rs                     trigger_hub_liquidity_provisioning
+    src/payment.rs                 dispatch_route_payment, WS payment waiters
+    src/telemetry.rs               verify_telemetry_signature, 4 tests
+    src/auth.rs                    WS origin allowlist, 1 test
+    src/ui_events.rs               send_ui_event (logged broadcast failures)
+    src/handlers/
+      health.rs, route.rs, telemetry.rs, simulation.rs
+      ws_agent.rs, ws_monitor.rs
+    src/workers/background.rs        heal, isolate, hub funding, dedupe
+    8 unit tests (graph, telemetry, auth; pubkey/registry in mesh-core)
 
-C. LOGIC CORRECTNESS
-   □ pick_healing_peer fallback (dead+3)%1024 — correct? optimal?
-   □ isolate_faulty_node — does graph stay consistent for routing?
-   □ Dijkstra on 3-regular mesh — correct for 1024 nodes?
-   □ Agent Healing state — can it get stuck forever?
-   □ Dashboard click-offline is visual-only — document as design gap?
-   □ Chord edge formula: (i + total_nodes/2) % total_nodes + 1 — off-by-one?
-   □ MeshPulsePayload serde aliases — field confusion attacks?
+  fiber-agent/                     Native sidecar (fiber_agent_sidecar)
+    src/main.rs                    single-agent daemon entry
+    src/bin/mesh_fleet.rs          1024-FA fleet binary (mesh-fleet)
+    src/lib.rs                     crate root, re-exports, 4 tests
+    src/daemon.rs                  SidecarConfig, telemetry poll, WS loop
+    src/identity.rs                env-aware signing keys
+    src/telemetry.rs               sign, queue, flush telemetry
+    src/payment.rs                 execute_mesh_payment (keysend)
+    src/hot_swap.rs                execute_hot_swap
+    src/mesh.rs                    mesh-core re-exports + sidecar helpers
+    src/mesh_ports.rs              per-agent FNN/MFA port math, 2 tests
+    src/fnn_client.rs                LiveFnnClient + SimulatedFnnClient, 8 tests
+    src/storage.rs                 SQLite cache, queue, ledger, 5 tests
+    19 unit tests total
 
-D. MEMORY & PERFORMANCE
-   □ CompleteMeshGraph: HashMap<u16, [MeshEdge;3]> — memory at scale?
-   □ Stack arrays [u32; 1025] in Dijkstra — stack overflow risk?
-   □ Dashboard: 1024 nodes × 3 edge layers — frame budget at 60fps?
-   □ Wasm closure + Rc<RefCell> — leak paths on reconnect loop?
-   □ TELEMETRY_QUEUE=512, BROADCAST_CAP=128 — tuning analysis?
+DASHBOARD (SOLID Phase 3 — ES modules, no monolithic dashboard.js):
+  index.html                       loads ./dashboard/main.js
+  dashboard/
+    main.js, config.js, state.js, topology.js, format.js
+    api/mfa.js
+    events/monitor.js, payment.js, liquidity.js
+    canvas/layout.js, draw.js, tooltip.js
 
-E. WASM-SPECIFIC
-   □ Closure lifetime tied to FiberAgent — sound without forget()?
-   □ WebSocket onmessage + RefCell — re-entrancy panics?
-   □ start_mesh_heartbeat_loop takes self by value — JS ownership?
-   □ CORS fetch from browser to MFA — preflight handling?
+OPS SCRIPTS (included for deployment audit; no binaries/data):
+  fnn-testnet/
+    spawn-mesh-fleet.ps1, stop-mesh-fleet.ps1, start-live-mfa.ps1
+    start-dashboard.ps1, spawn-live-fnn-nodes.ps1, get-ckb-address.ps1
+    mesh-pubkeys.example.json, mesh-pubkeys.live.example.json
+    templates/node-config.yml.template
+    config/testnet/config.yml, config/mainnet/config.yml
+  package.json                     serve:dashboard :8088, mesh:fleet scripts
 
-F. OPERATIONAL READINESS
-   □ Error handling completeness — silent failures?
-   □ Observability — sufficient logging/metrics for production?
-   □ Graceful shutdown — missing?
-   □ Config externalization — all magic numbers hardcoded?
-   □ Test coverage — zero tests, what to add first?
+COMPANION DOCS IN ZIP:
+  CODEBASE_MANIFEST.txt
+  FIBER_ECOSYSTEM_BEST_IN_CLASS.txt
+  FIBER_TESTNET_READINESS_REVIEW.txt
+  SIMULATION_BASE.txt
+  ARCHIVE_SNAPSHOTS.txt
 
-G. ARCHITECTURE
-   □ Single MFA SPOF — scaling path?
-   □ Healing is 1-hop swap vs /route multi-hop — consistency?
-   □ No persistent state — recovery after MFA restart?
-   □ Trust model — any agent can POST fake telemetry?
+EXPLICITLY EXCLUDED (do NOT expect in zip):
+  fiber/                           upstream nervosnetwork/fiber submodule
+  target/, Cargo.lock (optional), node_modules/, pkg/
+  fnn-testnet/fnn.exe, fnn-cli.exe, fnn-testnet/data/ (RocksDB, keys)
+  TPXDevs-code-audit-v4/, gemini audit*/, Fiber Readiness/
+  fiber-agent/wasm/, fiber-agent/demo/ (deprecated; removed from live tree)
+
+================================================================================
+ARCHITECTURE (5 TIERS — POST-REFACTOR)
+================================================================================
+
+  [Dashboard :8088]  ES modules · canvas mesh viz · payments · liquidity UI
+         |
+         |  WS /ws/monitor + HTTP /route, /simulation
+         v
+  [MFA :1025 — master-fiber-agent]
+    CompleteMeshGraph (1024 nodes, ring+skip+chord)
+    Dijkstra routing · per-hop capacity_shannons
+    Signed telemetry · healing · hub liquidity · sim payments API
+         |
+         |  WS /ws/:agent_id  (MESH_CHANNEL_HOT_SWAP, MESH_SEND_PAYMENT)
+         v
+  [Sidecar fleet — fiber-agent mesh-fleet or fiber-agent-daemon]
+    Per-FA FNN RPC (sim or live ports) · SQLite persistence
+    MESH_HEARTBEAT · ALERT_BALANCE_DEPLETED · keysend payments
+         |
+         |  JSON-RPC list_channels, open_channel, send_payment (keysend)
+         v
+  [FNN per agent or shared hub — fnn-testnet/ locally]
+    CKB testnet config · channels · P2P
+
+  [mesh-core] — shared topology, pubkeys, registry (both MFA + sidecar)
+
+Mesh scale: up to 1024 agents (FA-1..FA-1024) via mesh-fleet binary.
+Routing: MFA in-memory graph; NOT fully synced from live FNN channel state.
+Payments: MFA dispatches MESH_SEND_PAYMENT → sidecar keysend (single-hop/direct).
+Healing: isolate → pick_healing_peer → WS hot-swap → hub open_channel RPC.
+Funding: ALERT_BALANCE_DEPLETED + heal fallback → trigger_hub_liquidity_provisioning.
+
+================================================================================
+v5.0 REFACTOR — VERIFY EACH (PASS / FAIL / PARTIAL)
+================================================================================
+
+  □ mesh-core workspace crate extracts shared topology/pubkey/registry/error
+  □ MFA main.rs thinned to bootstrap; handlers/workers/hub/payment split
+  □ fiber-agent modules: daemon, identity, telemetry, payment, hot_swap
+  □ mesh-fleet binary supports 1..1024 FA with staggered heartbeat
+  □ Dashboard split into 12 ES modules; index.html loads dashboard/main.js
+  □ ui_events::send_ui_event logs broadcast failures (no silent drop)
+  □ MeshError typed errors in mesh-core; release profile LTO in workspace
+  □ Stale sim-peer-* pubkeys ignored; deterministic agent_fnn_pubkey dev keys
+  □ Requity renamed to Liquidity in UI/API/docs
+  □ 36 workspace unit tests pass (9 mesh-core + 8 MFA + 19 sidecar)
+  □ cargo clippy clean on all three crates
+  □ show-ckb-address Rust crate removed; get-ckb-address.ps1 is canonical
+
+================================================================================
+KNOWN LIMITATIONS (TEAM-ASSERTED — VALIDATE)
+================================================================================
+
+  • Sim/live payments are keysend on direct channels only — NO multi-hop settlement
+  • MFA graph is synthetic topology, not live FNN gossip sync
+  • Hub open_channel params may not match all FNN v0.8.x variants
+  • Dev secp256k1 keys in mesh-pubkeys — not production key management
+  • MFA in-memory state — no crash recovery / cluster HA
+  • Single-machine fleet — no K8s/service mesh deployment story yet
+  • Wasm browser agent deprecated; sidecar is primary path
+
+================================================================================
+AUDIT QUESTIONS — ANSWER ALL
+================================================================================
+
+CORRECTNESS & ARCHITECTURE
+  1.  Overall verdict: OK for local sim + FNN bridge? Score /10.
+  2.  Post-refactor module boundaries: coupling, circular deps, violation of SRP?
+  3.  mesh-core API surface: missing abstractions or leaky internals?
+  4.  Bugs in routing, healing, hub RPC, payment dispatch, storage schema?
+  5.  Dashboard ↔ MFA contract: simulation edge_nodes, route limits, event types?
+
+SECURITY
+  6.  CSWSH, CORS, MFA_AGENT_WS_TOKEN — sufficient for LAN? testnet?
+  7.  Signed telemetry: canonical message, replay, clock skew, key rotation?
+  8.  active_funding_locks vs background heal — double-fund race?
+  9.  SQLite: injection, path traversal, concurrent fleet writers?
+  10. Secrets in mesh-pubkeys.json, env vars, logs — exposure paths?
+
+CONCURRENCY & RELIABILITY
+  11. payment_waiters oneshot map — leak on agent disconnect?
+  12. Offline telemetry FIFO replay when MFA returns — ordering/idempotency?
+  13. mesh-fleet 1024 processes: port exhaustion, OOM, MFA overload?
+  14. ui_broadcast backpressure — monitor clients lagging?
+
+FNN / FIBER INTEGRATION
+  15. open_channel / list_channels / send_payment param compatibility with FNN?
+  16. Path to sync MFA graph from real FNN channels + gossip?
+  17. Multi-hop payment: gap vs fiber-lib payment router — implementation plan?
+  18. CKB testnet ops: funding, channel lifecycle, address derivation gaps?
+  19. Testnet readiness blockers for fiber.world participation?
+
+TESTING & OPS
+  20. 36 unit tests: quality, false confidence, top 10 missing integration tests?
+  21. fnn-testnet scripts: idempotency, error handling, production gaps?
+  22. Observability: metrics, tracing, structured logs — vs ecosystem norms?
+
+================================================================================
+FIBER ECOSYSTEM BENCHMARK — REQUIRED SECTION
+================================================================================
+
+Compare TPXDevs to ecosystem reference points:
+  • Official FNN (nervosnetwork/fiber) — payment router, channel actor, RPC
+  • fiber.world testnet requirements and public peer tooling
+  • Lightning-style ops: routing, liquidity management, watchtowers (CKB analog)
+  • Other mesh / fleet orchestration patterns in blockchain infra
+
+Deliver:
+
+  A) SCORECARD (1–10 each dimension):
+     - Control-plane architecture
+     - Real FNN integration depth
+     - Payment correctness (single + multi-hop path)
+     - Fleet scale (1024 agents)
+     - Security posture
+     - Observability & ops
+     - Developer experience (runbook, scripts, dashboard)
+     - Testnet production readiness
+     - Ecosystem differentiation (what makes TPXDevs unique vs "just another FNN node")
+
+  B) GAP ANALYSIS: top 15 gaps vs best-in-class Fiber mesh solution
+
+  C) ROADMAP (phased, 90-day):
+     Phase A — Testnet MVP (send_payment multi-hop, funded channels)
+     Phase B — Production hardening (TLS, auth, persistence, CI)
+     Phase C — Ecosystem leadership (public API, plugin SDK, multi-hub)
+
+  D) KILLER FEATURES: 5 capabilities that would make TPXDevs the definitive
+     Fiber Network fleet + observability platform (be specific, cite files to extend)
+
+  E) ANTI-PATTERNS: what NOT to build; where sim shortcuts must not leak to prod
 
 ================================================================================
 REQUIRED OUTPUT FORMAT
 ================================================================================
 
-Structure your response EXACTLY as follows:
+## VERDICT
+(OK / OK WITH CAVEATS / NOT OK — score /10)
 
 ## EXECUTIVE SUMMARY
-(3-5 sentences: overall risk level, top 3 concerns, production readiness score /10)
+(5-7 sentences)
 
 ## FINDINGS TABLE
-| ID | Severity | Category | File:Line | Finding | Exploit/Impact | Fix |
-|----|----------|----------|-----------|---------|----------------|-----|
-(CRITICAL / HIGH / MEDIUM / LOW / INFO — minimum 15 findings, aim for 25+)
+| ID | Severity | Category | File:Line | Finding | Impact | Fix |
+(minimum 20 findings: CRITICAL / HIGH / MEDIUM / LOW / INFO)
 
-## ARCHITECTURE ASSESSMENT
-(Strengths, weaknesses, single points of failure, scaling limits)
+## v5.0 REFACTOR REVIEW
+(Each checkbox above: PASS / FAIL / PARTIAL with file:line evidence)
 
-## CONCURRENCY DEEP DIVE
-(Race conditions, lock ordering, async pitfalls — with sequence diagrams if helpful)
+## TESTNET READINESS GATES
+(Map to FIBER_TESTNET_READINESS_REVIEW.txt gates A/B/C — PASS/FAIL/PARTIAL)
 
-## SECURITY ATTACK SURFACE MAP
-(Enumerate every input vector: HTTP, WS, browser, file, config)
+## UNIT TEST REVIEW
+(Validate 36 tests; propose 10 integration/E2E tests with setup steps)
 
-## MEMORY PROFILE ESTIMATE
-(Per-component RAM at 1024 agents, dashboard, MFA — rough numbers)
+## FIBER ECOSYSTEM SCORECARD
+(Table from section above)
 
-## v2 HARDENING VERDICT
-(Were the recent fixes correct? What's still missing?)
+## GAP ANALYSIS & 90-DAY ROADMAP
+(Phases A/B/C with effort estimates: S/M/L)
 
-## PRIORITIZED REMEDIATION ROADMAP
-Phase 1 (before any prod): ...
-Phase 2 (hardening): ...
-Phase 3 (scale): ...
+## PRIORITIZED FIX LIST
+(Top 10 actions, risk-ordered)
 
-## RECOMMENDED TEST SUITE
-(Unit, integration, fuzz targets — specific test cases with expected behavior)
+## CODE PATCHES
+(Top 5 critical/high — ready-to-apply snippets only)
 
-## CODE PATCHES (top 5 critical/high only)
-(Provide ready-to-apply code snippets for the 5 most important fixes)
+## DIFFERENTIATION RECOMMENDATIONS
+(5 killer features with implementation anchors)
 
 ================================================================================
-CONSTRAINTS FOR YOUR ANALYSIS
+CONSTRAINTS
 ================================================================================
 
-• Cite exact file paths and line numbers from the uploaded zip
+• Cite exact paths and line numbers from the uploaded zip only
 • Do NOT hallucinate files not in the bundle
-• Distinguish "acceptable for local dev sim" vs "must fix for production"
-• Challenge assumptions — think like an attacker AND a performance engineer
-• If a finding from v1 audit was fixed in v2, mark it RESOLVED and verify the fix
+• Separate: "OK for local sim" vs "must fix before testnet" vs "best-in-class"
+• fnn-testnet binaries excluded — audit adapter code and scripts only
+• fiber/ submodule excluded — reference FNN behavior from public docs only
 
 ================================================================================
-RUN COMMANDS (for reproduction)
+REPRODUCTION (verify claims against zip)
 ================================================================================
 
-  cd master-fiber-agent && cargo run     # MFA :1025
-  cd .. && npm run serve:dashboard       # Dashboard :8088
-  cd fiber-agent && npm run build:wasm && npm run serve  # Demo :8787
+  cargo test --workspace
+  cargo clippy --workspace -- -D warnings
+
+  cd fnn-testnet
+  .\start-live-mfa.ps1
+  npm run serve:dashboard          # repo root → http://localhost:8088
+  .\spawn-mesh-fleet.ps1 -To 32    # scale test; -To 1024 for full mesh
+
+  cd fiber-agent
+  cargo run --bin fiber-agent-daemon   # single FA (default FA-44)
 
 ================================================================================

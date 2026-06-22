@@ -1,0 +1,198 @@
+================================================================================
+TPXDevs — CODE HEALTH & SECURITY AUDIT (v4.1 — post sidecar + FNN bridge)
+================================================================================
+
+You are a principal security engineer + distributed systems architect.
+Review this codebase and answer: **Is the code OK?** — meaning correct, secure
+enough for its stated scope (local mesh simulation + FNN sidecar bridge), and
+free of critical bugs.
+
+Upload and analyze: **TPXDevs-code-audit-v4.zip** (regenerate to include sidecar)
+Companion: SIMULATION_BASE.txt, FIBER_TESTNET_READINESS_REVIEW.txt
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+
+TPXDevs is a 1024-node FiberAgent mesh **simulation** with 4 runtime tiers:
+
+TIER 1 — Fiber Network Node (FNN v0.8.1 release binary)
+  Path: fnn-testnet/ (local runtime, not in audit zip)
+  Bind: RPC 127.0.0.1:8227 · P2P :8228
+  Role: Official FNN on CKB testnet config · 0 channels until funded
+
+TIER 2 — master-fiber-agent (Rust / Axum / Tokio)
+  Path: master-fiber-agent/src/main.rs (~646 lines)
+  Bind: 127.0.0.1:1025
+  Role: Master Fiber Agent (MFA) — mesh supervisor brain
+  APIs:
+    GET  /              — health JSON
+    POST /telemetry     — MESH_HEARTBEAT + ALERT_MFA_NODE_DROPPED
+    POST /route         — Dijkstra multi-hop routing over live mesh graph
+    WS   /ws/:agent_id  — push MESH_CHANNEL_HOT_SWAP config to agents
+    WS   /ws/monitor    — broadcast MESH_HEAL + MESH_HEARTBEAT to dashboard
+
+TIER 3a — fiber-agent native sidecar (fiber-agent-daemon)
+  Paths: fiber-agent/src/main.rs (~223), fiber-agent/src/fnn_client.rs (~178)
+  Role: Poll FNN list_channels every 3s · POST MESH_HEARTBEAT to MFA
+        · WS reconnect loop with ping/pong keepalive to MFA
+  Default: AGENT_ID=44 · FNN_RPC_URL=http://127.0.0.1:8227
+  FNN_MODE=simulate → SimulatedFnnClient fallback (no fnn.exe)
+
+TIER 3b — fiber-agent Wasm (browser agent)
+  Path: fiber-agent/wasm/src/lib.rs (~305 lines)
+  Role: Edge FiberAgent — Math.random() peer health · ALERT telemetry only
+  Runs in browser via fiber-agent/demo/ on :8787
+
+TIER 4 — Dashboard + Demo (vanilla JS / HTML5 Canvas)
+  Paths: dashboard.js (~615 lines), index.html
+  Dashboard: :8088 — 32×32 lattice visualizer, WS monitor, route simulator
+  Demo: :8787/demo/ — single Wasm agent harness
+
+================================================================================
+MESH TOPOLOGY
+================================================================================
+
+1024 agents (FA-1..FA-1024). Each node starts with 3 edges (ring/skip/chord),
+stored in a **flexible Vec<MeshEdge>** per node (not a fixed [MeshEdge; 3]).
+
+Edge formulas (N=1024, node i):
+  ring  = (i == N) ? 1 : i+1
+  skip  = (i >= N-1) ? 1 : i+2
+  chord = (i + N/2) % N + 1
+
+MeshEdge fields:
+  target_node: u16
+  capacity_shannons: u64   — per-hop liquidity gate in Dijkstra
+  is_active: bool
+
+Healing flow (Wasm or sidecar ALERT path):
+  1. Agent detects peer failure
+  2. Agent POSTs ALERT_MFA_NODE_DROPPED to /telemetry
+  3. MFA background worker: isolate_faulty_node → pick_healing_peer
+  4. MFA sends MESH_CHANNEL_HOT_SWAP via /ws/:agent_id (try_send)
+  5. Agent swaps peer_id on broken channel, returns to Active
+  6. MFA broadcasts MESH_HEAL to /ws/monitor → dashboard renders
+
+Sidecar health flow (NEW in v4.1):
+  1. Sidecar polls FNN list_channels via JSON-RPC every 3s
+  2. POSTs MESH_HEARTBEAT to /telemetry (channels healthy)
+  3. MFA apply_heartbeat_liveness syncs reported neighbors in mesh graph
+  4. MFA logs + broadcasts MESH_HEARTBEAT to /ws/monitor → dashboard
+  5. On FNN failure: ALERT_MFA_NODE_DROPPED → heal → WS hot-swap → sidecar open_channel
+
+NOTE: MFA graph is NOT synced from FNN channels — routing uses in-memory sim graph.
+
+================================================================================
+v4.1 CHANGES — VERIFY THESE ARE CORRECT & COMPLETE
+================================================================================
+
+Graph & routing (master-fiber-agent/main.rs):
+  ✓ CompleteMeshGraph.adjacency_map: HashMap<u16, Vec<MeshEdge>>
+  ✓ Dijkstra iterates channels.iter() with capacity_shannons gate
+  ✓ Unit tests: test_dijkstra_finds_optimal_path, test_routing_avoids_isolated_nodes
+  ✓ MESH_HEARTBEAT telemetry path → dashboard monitor WS
+
+Native sidecar (fiber-agent/):
+  ✓ fiber-agent-daemon binary (fiber_agent_sidecar crate)
+  ✓ LiveFnnClient: JSON-RPC list_channels (params: [{"include_closed": false}])
+  ✓ SimulatedFnnClient fallback when FNN_MODE=simulate or RPC unreachable
+  ✓ MFA WS reconnect loop (does not exit on MFA down)
+  ✓ WS ping/pong keepalive + Origin header on MFA link
+  ✓ reqwest with rustls-tls (no OpenSSL on Windows)
+
+FNN local deployment (fnn-testnet/):
+  ✓ fnn_v0.8.1 Windows release binary
+  ✓ start-testnet.ps1 / stop-testnet.ps1 / setup-testnet-key.ps1
+  ✓ Dev CKB key, password tpxdevs-local
+
+Telemetry (MFA + agents):
+  ✓ MeshPulsePayload optional crypto fields (public_key_hex, signature_hex) — stub
+  ✓ Backward-compatible serde
+
+Wasm (fiber-agent/wasm/):
+  ✓ Moved to wasm/ sub-crate
+  ✓ FiberNodeRpc async trait (stub, not wired in Wasm runtime)
+  ✓ is_local_endpoint() via Url + Location web-sys feature
+
+Prior hardening (still in effect — re-verify):
+  ✓ PeerRegistry = HashMap<u16, (Sender, u64)> + NEXT_CONN_ID token cleanup
+  ✓ WS Origin validation (8088/8787 only)
+  ✓ CORS restricted to localhost:8088 and :8787
+  ✓ Request body limit 16KB, telemetry validation, alert dedupe (2048)
+  ✓ Wasm active_closure (no Closure::forget leak)
+  ✓ Monitor lag handling (SYS_LAG event)
+
+================================================================================
+AUDIT QUESTIONS — ANSWER DIRECTLY
+================================================================================
+
+1. **Overall verdict**: Is this codebase OK for local sim + FNN sidecar bridge?
+   Score /10 with one-sentence justification.
+
+2. **Correctness**: Any logic bugs in routing, healing, telemetry, or FNN RPC?
+
+3. **Security**: Critical/high issues for localhost-bound services? What breaks
+   if MFA is bound to 0.0.0.0?
+
+4. **Concurrency**: Race conditions in peer registry, graph locks, sidecar WS loop?
+
+5. **FNN bridge**: Is LiveFnnClient JSON-RPC correct? Pubkey→u16 stub mapping risks?
+
+6. **Wasm vs sidecar**: Two agent paths — consistency issues? Should Wasm be retired?
+
+7. **Test gaps**: Are 2 Dijkstra tests sufficient? What integration tests are missing?
+
+8. **v4.1 regressions**: Did sidecar or MESH_HEARTBEAT introduce bugs?
+
+9. **Crypto fields**: public_key_hex/signature_hex present but unused — safe?
+
+10. **Testnet readiness**: What blocks send_payment on official Fiber testnet?
+
+================================================================================
+REQUIRED OUTPUT FORMAT
+================================================================================
+
+## VERDICT
+(OK / OK WITH CAVEATS / NOT OK — plus score /10)
+
+## EXECUTIVE SUMMARY
+(3-5 sentences)
+
+## FINDINGS TABLE
+| ID | Severity | Category | File:Line | Finding | Impact | Fix |
+|----|----------|----------|-----------|---------|--------|-----|
+(CRITICAL / HIGH / MEDIUM / LOW / INFO — minimum 12 findings)
+
+## v4.1 CHANGE REVIEW
+(Each v4.1 item: PASS / FAIL / PARTIAL with evidence)
+
+## UNIT TEST REVIEW
+(Are existing tests correct? Suggest 5 more high-value tests)
+
+## PRIORITIZED FIX LIST
+(Top 5 actions, ordered by risk)
+
+## CODE PATCHES (top 3 only)
+(Ready-to-apply snippets for critical/high issues only)
+
+================================================================================
+CONSTRAINTS
+================================================================================
+
+• Cite exact file paths and line numbers from the uploaded zip
+• Do NOT hallucinate files not in the bundle
+• Distinguish "acceptable for local sim" vs "must fix for production/testnet"
+• fnn-testnet/ binaries are runtime-only — audit sidecar adapter code
+
+================================================================================
+RUN COMMANDS (full stack — see SIMULATION_BASE.txt)
+================================================================================
+
+  cd master-fiber-agent && cargo test && cargo run          # MFA :1025
+  cd fnn-testnet && .\start-testnet.ps1                     # FNN :8227
+  cd fiber-agent && cargo run --bin fiber-agent-daemon      # Sidecar
+  npm run serve:dashboard                                   # Dashboard :8088
+  cd fiber-agent && npm run build:wasm && npm run serve     # Wasm :8787
+
+================================================================================

@@ -5,11 +5,22 @@ target/
 # Generated Wasm package (rebuild with wasm-pack)
 fiber-agent/pkg/
 
+# Local sidecar runtime state
+**/.fiber-agent/
+
 # Dependencies
 node_modules/
 
 # Binaries
 *.wasm
+
+# Audit / release archives (regenerate locally)
+*.zip
+*.tgz
+TPXDevs-code-audit-v*/
+
+# Upstream Fiber monorepo (not part of TPXDevs workspace)
+fiber/
 
 # OS / editor
 .DS_Store

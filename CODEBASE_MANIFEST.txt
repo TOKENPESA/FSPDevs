@@ -1,62 +1,107 @@
-TPXDevs Deep Audit Bundle v2 — File Manifest
-Generated for Gemini intelligence audit
-============================================
+TPXDevs — File Manifest (v5.0 · Post-Refactor · June 2026)
+===========================================================
 
-SOURCE FILES (application code only — no target/, pkg/, node_modules/)
+CANONICAL DOCS:
+  SIMULATION_BASE.txt                  Runbook + architecture (update for v5)
+  FIBER_TESTNET_READINESS_REVIEW.txt   Testnet gate scorecard
+  FIBER_ECOSYSTEM_BEST_IN_CLASS.txt    Ecosystem benchmark + roadmap seed
+  GEMINI_DEEP_AUDIT_PROMPT.txt         Gemini audit prompt (primary)
+  GEMINI_CODE_AUDIT_v4.txt             Legacy prompt (reference only)
+  CODEBASE_MANIFEST.txt                This file
+  ARCHIVE_SNAPSHOTS.txt                Frozen audit folders (not live source)
+  bundle-gemini-audit.ps1              Generates TPXDevs-code-audit-v5.zip
 
-master-fiber-agent/
-  src/main.rs          538 lines  MFA server: mesh graph, healing, Dijkstra, WS
-  Cargo.toml            18 lines  axum 0.7, tokio, tower-http cors+limit
+WORKSPACE (root Cargo.toml):
+  mesh-core/           Shared topology, pubkeys, registry, errors
+  master-fiber-agent/  MFA supervisor (Axum :1025)
+  fiber-agent/         Native sidecar + mesh-fleet binary
 
-fiber-agent/
-  src/lib.rs           278 lines  Wasm FiberAgent: heartbeat, WS, MFA alerts
-  Cargo.toml            26 lines  wasm-bindgen, gloo-timers, web-sys
-  demo/main.js         136 lines  Browser harness: mesh peers, start loop
-  demo/index.html      157 lines  Demo UI
-  package.json           9 lines  build:wasm, serve :8787
+mesh-core/ (9 tests)
+  src/lib.rs, constants.rs, types.rs, topology.rs
+  src/pubkey.rs, registry.rs, error.rs
+  Cargo.toml
 
-dashboard (project root)/
-  dashboard.js         501 lines  Canvas visualizer, WS monitor, tooltips
-  index.html           126 lines  Dashboard UI shell
-  package.json           8 lines  serve:dashboard :8088
+master-fiber-agent/ (8 tests)
+  src/main.rs          Bootstrap (~125 lines)
+  src/config.rs        Env, CORS, sim payments
+  src/types.rs         DTOs
+  src/graph.rs         CompleteMeshGraph, Dijkstra
+  src/state.rs         AppState, HubConfig
+  src/hub.rs           Hub liquidity provisioning
+  src/payment.rs       Route payment dispatch
+  src/telemetry.rs     Signature verification
+  src/auth.rs          WS origin allowlist
+  src/ui_events.rs     UI broadcast with logging
+  src/handlers/        health, route, telemetry, simulation, ws_agent, ws_monitor
+  src/workers/         background.rs (heal, funding, dedupe)
+  Cargo.toml
 
-config/
-  .gitignore            19 lines
-  .cursorignore          6 lines
+fiber-agent/ (19 tests) — crate: fiber_agent_sidecar
+  src/main.rs          fiber-agent-daemon binary
+  src/bin/mesh_fleet.rs mesh-fleet binary (1024 FA fleet)
+  src/lib.rs           Crate root
+  src/daemon.rs        Sidecar loop, telemetry poll
+  src/identity.rs      Signing key resolution
+  src/telemetry.rs     Sign, queue, flush
+  src/payment.rs       MESH_SEND_PAYMENT / keysend
+  src/hot_swap.rs      Channel hot-swap executor
+  src/mesh.rs          mesh-core re-exports
+  src/mesh_ports.rs    Per-agent port allocation
+  src/fnn_client.rs    Live + Simulated FNN RPC
+  src/storage.rs       SQLite persistence
+  Cargo.toml, package.json
 
-TOTAL: ~1,826 lines application source
+dashboard/ (12 ES modules)
+  main.js, config.js, state.js, topology.js, format.js
+  api/mfa.js
+  events/monitor.js, payment.js, liquidity.js
+  canvas/layout.js, draw.js, tooltip.js
+  index.html           Loads ./dashboard/main.js
+  package.json         serve:dashboard :8088
 
-RECENT CHANGES (v2 vs v1 bundle):
-  + MFA: NEXT_CONN_ID + (Sender, u64) peer registry token cleanup
-  + Wasm: active_closure replaces Closure::forget()
-  + Wasm: WS reconnect closes old socket before new link
+fnn-testnet/ (scripts + config in audit zip; binaries/data excluded)
+  spawn-mesh-fleet.ps1, stop-mesh-fleet.ps1
+  start-live-mfa.ps1, start-dashboard.ps1
+  spawn-live-fnn-nodes.ps1, get-ckb-address.ps1
+  mesh-pubkeys.example.json, mesh-pubkeys.live.example.json
+  templates/node-config.yml.template
+  config/testnet/config.yml, config/mainnet/config.yml
 
-EXCLUDED (not in bundle):
-  target/           Rust build artifacts
-  fiber-agent/pkg/  Generated wasm-pack output
-  node_modules/     npm deps
-  *.wasm            Compiled binaries
+EXCLUDED FROM AUDIT ZIP:
+  fiber/               Upstream submodule
+  target/, node_modules/, pkg/
+  fnn-testnet/fnn.exe, fnn-cli.exe, fnn-testnet/data/
+  TPXDevs-code-audit-v4/, gemini audit*/, Fiber Readiness/
+  fiber-agent/wasm/, fiber-agent/demo/
 
-ARCHITECTURE DIAGRAM:
+ARCHITECTURE:
 
-  [Browser Demo :8787]          [Dashboard :8088]
-       |  Wasm FiberAgent              |  dashboard.js
-       |  HTTP POST /telemetry         |  WS /ws/monitor
-       |  WS /ws/:agent_id              |
-       +----------+--------------------+
-                  |
-            [MFA :1025]
-            master-fiber-agent
-            CompleteMeshGraph (1024 nodes × 3 edges)
-            background_processor_worker
-            Dijkstra /route
+  [Dashboard :8088]  ES modules
+         |
+         |  WS monitor, HTTP route/simulation
+         v
+  [MFA :1025]  master-fiber-agent + mesh-core
+         |
+         |  WS per agent (hot-swap, payments)
+         v
+  [Sidecar fleet]  fiber-agent mesh-fleet / daemon
+         |
+         |  JSON-RPC
+         v
+  [FNN]  fnn-testnet (local)
 
-MESH EDGE FORMULAS (per node i, N=1024):
-  ring  = (i == N) ? 1 : i+1
-  skip  = (i >= N-1) ? 1 : i+2
-  chord = (i + N/2) % N + 1
+KEY PORTS:
+  1025   MFA HTTP/WS
+  8088   Dashboard
+  8227+  FNN RPC (per-agent via mesh_ports when fleet live)
 
-KEY CONSTANTS:
-  RING_SIZE=1024, MAX_BODY_BYTES=16KB, TELEMETRY_QUEUE=512
-  PEER_TX_CAP=16, BROADCAST_CAP=128, DEDUPE_CAP=2048
-  CHANNEL_LIQUIDITY=10_000_000_000_000
+TESTS: 36 total (9 mesh-core + 8 MFA + 19 sidecar)
+VERIFY: cargo test --workspace && cargo clippy --workspace -- -D warnings
+
+START ORDER:
+  1. fnn-testnet\start-live-mfa.ps1
+  2. npm run serve:dashboard
+  3. fnn-testnet\spawn-mesh-fleet.ps1 -To N
+
+AUDIT BUNDLE:
+  .\bundle-gemini-audit.ps1  →  TPXDevs-code-audit-v5.zip

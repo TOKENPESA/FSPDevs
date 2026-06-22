@@ -1,0 +1,221 @@
+================================================================================
+TPXDevs — SIMULATION BASE (current state · v4.3 · June 2026)
+================================================================================
+
+This document is the canonical reference for what the local mesh simulation
+is today, how to run it, and what is still simulated vs real.
+
+================================================================================
+WHAT WE ARE BUILDING
+================================================================================
+
+A 1024-node FiberAgent mesh CONTROL PLANE that:
+  · Models ring + skip + chord topology in memory
+  · Routes payments via Dijkstra with per-hop liquidity (capacity_shannons)
+  · Detects failures, isolates nodes, and hot-swaps healing peers
+  · Visualizes the mesh on a dashboard and simulates Wasm browser agents
+
+We are NOT yet a full Fiber Network testnet participant (no funded channels,
+no send_payment on-chain). We HAVE integrated a local FNN node and a native
+sidecar that polls real channel state via JSON-RPC.
+
+Readiness estimate: ~45% toward Fiber Testnet (v4.3 hub funding + storage).
+Branch: feature/sidecar-adapter
+
+Companion docs:
+  FIBER_TESTNET_READINESS_REVIEW.txt  — testnet gate scorecard (v4.3)
+  CODEBASE_MANIFEST.txt               — file inventory
+  GEMINI_DEEP_AUDIT_PROMPT.txt        — Gemini audit prompt + zip upload
+
+================================================================================
+ARCHITECTURE (4 RUNTIME TIERS)
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ TIER 4 — Dashboard (:8088)                                                 │
+│   dashboard.js · 32×32 canvas · WS monitor · route simulator                 │
+│   Events: MESH_HEAL, MESH_HEARTBEAT, SYS_LAG                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ TIER 3a — Wasm FiberAgent (:8787/demo)                                     │
+│   fiber-agent/wasm/src/lib.rs                                                │
+│   Browser agent · Math.random() peer health · ALERT telemetry              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ TIER 3b — Native Sidecar (fiber-agent-daemon)                              │
+│   fiber-agent/src/main.rs + fnn_client.rs                                  │
+│   Polls FNN list_channels · MESH_HEARTBEAT to MFA · WS hot-swap listener    │
+│   Default agent: FA-44 · FNN RPC :8227 · MFA :1025                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ TIER 2 — Master Fiber Agent (:1025)                                        │
+│   master-fiber-agent/src/main.rs                                             │
+│   CompleteMeshGraph (Vec<MeshEdge> per node, capacity_shannons)              │
+│   POST /telemetry · POST /route · WS /ws/:id · WS /ws/monitor              │
+│   Healing worker · alert dedupe · connection-token peer registry             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ TIER 1 — Fiber Network Node (FNN v0.8.1 release binary)                    │
+│   fnn-testnet/fnn.exe · RPC 127.0.0.1:8227 · P2P :8228                     │
+│   CKB testnet · dev wallet key · 0 channels until funded/peered              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Data flows:
+  Sidecar  ──HTTP POST──► MFA /telemetry  (MESH_HEARTBEAT | ALERT_*)
+  Sidecar  ◄──WebSocket──► MFA /ws/:agent_id  (MESH_CHANNEL_HOT_SWAP)
+  Wasm     ──HTTP POST──► MFA /telemetry  (ALERT_MFA_NODE_DROPPED only)
+  Dashboard◄──WebSocket──► MFA /ws/monitor  (MESH_HEAL | MESH_HEARTBEAT)
+  Sidecar  ──JSON-RPC───► FNN :8227  (list_channels, open_channel stub)
+  Dashboard──HTTP POST──► MFA /route  (Dijkstra path visualization)
+
+================================================================================
+REPO LAYOUT
+================================================================================
+
+TPXDevs/
+├── master-fiber-agent/     MFA supervisor (Rust/Axum)
+├── fiber-agent/            Native sidecar crate (fiber_agent_sidecar)
+│   ├── src/main.rs         fiber-agent-daemon binary
+│   ├── src/fnn_client.rs   LiveFnnClient JSON-RPC adapter
+│   ├── src/lib.rs          shared MeshChannelState types
+│   └── wasm/               Browser Wasm agent (wasm-pack → pkg/)
+├── fnn-testnet/            Official FNN v0.8.1 Windows release + scripts
+│   ├── fnn.exe, fnn-cli.exe
+│   ├── start-testnet.ps1, stop-testnet.ps1
+│   └── data/               node store, config.yml, ckb/key
+├── fiber/                  nervosnetwork/fiber source (clone, optional build)
+├── dashboard.js, index.html
+├── FIBER_TESTNET_READINESS_REVIEW.txt
+├── CODEBASE_MANIFEST.txt
+├── GEMINI_CODE_AUDIT_v4.txt
+└── SIMULATION_BASE.txt     (this file)
+
+================================================================================
+FULL STACK — START ORDER
+================================================================================
+
+Terminal 1 — MFA (required)
+  cd master-fiber-agent
+  cargo run
+  → http://127.0.0.1:1025/
+
+Terminal 2 — FNN testnet node (for live sidecar; optional if FNN_MODE=simulate)
+  cd fnn-testnet
+  .\start-testnet.ps1
+  → RPC http://127.0.0.1:8227
+
+Terminal 3 — Native sidecar (recommended)
+  cd fiber-agent
+  $env:FNN_RPC_URL = "http://127.0.0.1:8227"
+  $env:AGENT_ID = "44"
+  cargo run --bin fiber-agent-daemon
+
+  Simulate FNN without fnn.exe:
+  $env:FNN_MODE = "simulate"
+
+Terminal 4 — Dashboard
+  cd ..   (project root)
+  npm run serve:dashboard
+  → http://localhost:8088/
+
+Terminal 5 — Wasm browser demo (optional)
+  cd fiber-agent
+  npm run build:wasm    # outputs to fiber-agent/pkg/
+  npm run serve
+  → http://localhost:8787/demo/
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+| Variable                   | Component | Default              |
+|----------------------------|-----------|----------------------|
+| MFA_HOST                   | Sidecar   | 127.0.0.1:1025       |
+| FNN_RPC_URL                | Sidecar   | http://127.0.0.1:8227|
+| FNN_MODE=simulate          | Sidecar   | (off) use live RPC   |
+| FNN_OPEN_CHANNEL_SHANNONS  | Sidecar   | 10000000000          |
+| AGENT_ID                   | Sidecar   | 44                   |
+| FIBER_SECRET_KEY_PASSWORD  | FNN       | tpxdevs-local        |
+| RUST_LOG                   | FNN/MFA   | info                 |
+
+================================================================================
+TELEMETRY STATUS CODES (MFA /telemetry)
+================================================================================
+
+| Status                  | Source        | MFA action                          |
+|-------------------------|---------------|-------------------------------------|
+| MESH_HEARTBEAT          | Sidecar       | Log + broadcast to dashboard monitor|
+| ALERT_MFA_NODE_DROPPED  | Wasm/Sidecar  | Isolate node, heal, WS hot-swap     |
+
+Wasm agent still only sends ALERT on simulated failure.
+Sidecar sends MESH_HEARTBEAT every 3s when FNN channels are healthy.
+
+================================================================================
+MESH GRAPH (MFA)
+================================================================================
+
+Per node i (N=1024):
+  ring  = successor (i+1, wraps)
+  skip  = i+2 (wraps)
+  chord = (i + N/2) % N + 1
+
+Storage: HashMap<u16, Vec<MeshEdge>>
+MeshEdge: { target_node, capacity_shannons, is_active }
+
+Dijkstra skips edges where:
+  !is_active || capacity_shannons < amount || target is offline
+
+Unit tests (cargo test in master-fiber-agent):
+  · test_dijkstra_finds_optimal_path
+  · test_routing_avoids_isolated_nodes
+
+================================================================================
+WHAT IS REAL vs SIMULATED
+================================================================================
+
+| Behavior                    | Real today? | Notes                              |
+|-----------------------------|-------------|------------------------------------|
+| Mesh topology in MFA        | Simulated   | In-memory graph, not from FNN      |
+| Dijkstra /route             | Simulated   | Uses MFA graph + capacity_shannons |
+| FNN node process            | REAL        | v0.8.1 binary, testnet config      |
+| FNN list_channels RPC       | REAL        | Sidecar polls every 3s             |
+| Channel open/payment        | NOT STARTED | 0 channels; need CKB faucet        |
+| Wasm peer health            | Simulated   | Math.random() > 0.05               |
+| Sidecar peer health         | REAL*       | *From FNN channel is_active/state    |
+| MFA healing hot-swap        | Partial     | MFA graph + WS; sidecar calls open_channel |
+| Crypto signed telemetry     | Stub        | public_key_hex fields exist, unused|
+| 1024 concurrent agents      | Simulated   | 1 sidecar + 1 optional Wasm        |
+
+================================================================================
+KNOWN LIMITATIONS
+================================================================================
+
+  · Only one MFA instance per machine (:1025)
+  · Only one FNN store lock per data dir (use stop-testnet.ps1 before restart)
+  · Sidecar maps FNN pubkeys → u16 stubs for mesh agent IDs
+  · MFA ignores FNN graph; routing and FNN channels are not unified
+  · Windows: build FNN from source fails (use release binary in fnn-testnet/)
+  · open_channel wired: MFA hot-swap → sidecar execute_hot_swap → FNN RPC
+
+================================================================================
+NEXT MILESTONES (simulation → testnet)
+================================================================================
+
+  1. Fund CKB testnet wallet + open channel with public peer
+  2. Wire healing hot-swap → fnn_client.open_channel
+  3. Sync MFA graph edges from FNN list_channels balances
+  4. Replace Wasm Math.random() with sidecar-style health or retire Wasm path
+  5. Signed MESH_HEARTBEAT (public_key_hex / signature_hex)
+  6. Integration tests: telemetry → heal → WS command round-trip
+  7. Docker-compose: MFA + FNN + dashboard
+
+================================================================================
+QUICK HEALTH CHECKS
+================================================================================
+
+  Invoke-RestMethod http://127.0.0.1:1025/
+  & fnn-testnet\fnn-cli.exe info
+  netstat -ano | findstr ":1025 :8227 :8088"
+
+Stop stuck processes:
+  Stop-Process -Name master_fiber_agent,fiber-agent-daemon,fnn -Force -ErrorAction SilentlyContinue
+
+================================================================================
+END
+================================================================================

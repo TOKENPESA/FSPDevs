@@ -1,0 +1,4 @@
+{
+  "_comment": "Map FA mesh IDs to REMOTE Fiber node pubkeys (NOT the hub's own pubkey). Hub opens channels TO these peers.",
+  "45": "035ead757be381c8baf634cafcb75292d8361acf8b6451e889366405f08edd0381"
+}

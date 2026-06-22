@@ -1,8 +1,25 @@
 {
-  "name": "tpxdevs-dashboard",
-  "private": true,
+  "name": "@tpxdevs/fiber-dashboard",
+  "version": "1.0.0",
+  "description": "Best-in-class embeddable web canvas component for Fiber Network mesh orchestration and monitoring",
+  "main": "./dashboard/main.js",
   "type": "module",
+  "exports": {
+    ".": "./dashboard/main.js",
+    "./canvas": "./dashboard/canvas/layout.js",
+    "./styles": "./dashboard/styles.css"
+  },
+  "files": [
+    "dashboard/",
+    "index.html"
+  ],
   "scripts": {
-    "serve:dashboard": "npx --yes serve . -p 8088 --no-port-switching"
+    "serve:dashboard": "npx --yes serve . -p 8088 --no-port-switching",
+    "dashboard": "powershell -ExecutionPolicy Bypass -File fnn-testnet/start-dashboard.ps1",
+    "mesh:fleet": "powershell -ExecutionPolicy Bypass -File fnn-testnet/spawn-mesh-fleet.ps1"
+  },
+  "dependencies": {},
+  "publishConfig": {
+    "access": "public"
   }
 }

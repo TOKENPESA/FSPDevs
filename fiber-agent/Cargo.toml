@@ -1,30 +1,30 @@
 [package]
-name = "fiber_agent"
+name = "fiber_agent_sidecar"
 version = "1.0.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fiber-agent-daemon"
+path = "src/main.rs"
+
+[[bin]]
+name = "mesh-fleet-daemon"
+path = "src/bin/mesh_fleet.rs"
 
 [dependencies]
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
+mesh-core = { path = "../mesh-core" }
+tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-gloo-timers = { version = "0.3", features = ["futures"] }
-js-sys = "0.3"
-
-[dependencies.web-sys]
-version = "0.3"
-features = [
-    "console",
-    "Window",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Response",
-    "Headers",
-    "WebSocket",
-    "MessageEvent",
-    "Url",
-]
+async-trait = "0.1"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = { version = "0.20", default-features = false, features = ["connect"] }
+secp256k1 = { version = "0.29", default-features = false, features = ["std"] }
+sha2 = "0.10"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }

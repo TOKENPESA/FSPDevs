@@ -1,10 +1,41 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
+use once_cell::sync::Lazy;
+use secp256k1::ecdsa::Signature;
+use secp256k1::{Message, PublicKey, Secp256k1};
+use sha2::{Digest, Sha256};
+
 use crate::config::DEDUPE_CAP;
 use crate::state::AppState;
-use crate::types::{MeshPulsePayload, RouteRequestPayload};
+use crate::types::RouteRequestPayload;
+use mesh_core::types::MeshPulsePayload;
 use mesh_core::{telemetry_canonical_message, valid_agent_id, MeshError};
 
 const MAX_CLOCK_SKEW_SECONDS: i64 = 15;
+
+/// Per-agent telemetry nonce high-water marks — rejects replayed or out-of-order heartbeats.
+static TELEMETRY_NONCE_CACHE: Lazy<std::sync::RwLock<HashMap<u16, u64>>> =
+    Lazy::new(|| std::sync::RwLock::new(HashMap::new()));
+
+pub fn verify_telemetry_sequence(payload: &MeshPulsePayload) -> Result<(), MeshError> {
+    let new_nonce = payload.nonce;
+    let mut registry = TELEMETRY_NONCE_CACHE
+        .write()
+        .map_err(|_| MeshError::InvalidPayload("telemetry nonce registry poisoned".to_string()))?;
+
+    if let Some(&last_seen_nonce) = registry.get(&payload.agent_id) {
+        if new_nonce <= last_seen_nonce {
+            return Err(MeshError::InvalidPayload(format!(
+                "❌ [REPLAY FAULT] Rejected out-of-order packet on FA-{}. Incoming nonce: {}, High-watermark: {}",
+                payload.agent_id, new_nonce, last_seen_nonce
+            )));
+        }
+    }
+
+    registry.insert(payload.agent_id, new_nonce);
+    Ok(())
+}
 
 pub fn verify_telemetry_timestamp(payload: &MeshPulsePayload) -> Result<(), MeshError> {
     if payload.timestamp == 0 {
@@ -27,21 +58,18 @@ pub fn verify_telemetry_timestamp(payload: &MeshPulsePayload) -> Result<(), Mesh
     }
     Ok(())
 }
-use secp256k1::ecdsa::Signature;
-use secp256k1::{Message, PublicKey, Secp256k1};
-use sha2::{Digest, Sha256};
 
 pub fn validate_telemetry(p: &MeshPulsePayload) -> bool {
     if p.public_key_hex.is_none() || p.signature_hex.is_none() {
         eprintln!(
             "❌ [POLICY ENFORCEMENT] Dropped unauthenticated legacy browser payload from Node FA-{}",
-            p.agent
+            p.agent_id
         );
         return false;
     }
 
-    if !valid_agent_id(p.agent)
-        || !valid_agent_id(p.report_target)
+    if !valid_agent_id(p.agent_id)
+        || (p.report_target != 0 && !valid_agent_id(p.report_target))
         || p.active_mesh_neighbors.len() > 8
         || !p
             .active_mesh_neighbors
@@ -117,8 +145,35 @@ pub fn validate_route(p: &RouteRequestPayload, max_bound: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesh_core::{mesh_unix_timestamp_secs, neighbors_canonical};
+    use mesh_core::{mesh_unix_timestamp_secs, telemetry_canonical_message};
     use secp256k1::SecretKey;
+
+    fn sample_nonce_payload(agent_id: u16, nonce: u64) -> MeshPulsePayload {
+        MeshPulsePayload {
+            agent_id,
+            timestamp: 1,
+            nonce,
+            local_capacity_shannons: 0,
+            public_key_hex: None,
+            signature_hex: None,
+            status: "MESH_HEARTBEAT".to_string(),
+            active_mesh_neighbors: vec![],
+            report_target: agent_id,
+            attempt: 0,
+            fnn_pubkey_hex: None,
+            peer_connect_address: None,
+            asset_capacities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_verify_telemetry_sequence_rejects_replay() {
+        let agent_id = 9_001;
+        verify_telemetry_sequence(&sample_nonce_payload(agent_id, 10)).expect("first nonce");
+        let err = verify_telemetry_sequence(&sample_nonce_payload(agent_id, 10)).unwrap_err();
+        assert!(err.to_string().contains("REPLAY FAULT"));
+        assert!(verify_telemetry_sequence(&sample_nonce_payload(agent_id, 11)).is_ok());
+    }
 
     #[test]
     fn test_validate_route_accepts_in_bounds_nodes() {
@@ -128,6 +183,8 @@ mod tests {
             amount_shannons: 1000,
             active_network_limit: None,
             execute: None,
+            target_asset: None,
+            route_metadata: None,
         };
         assert!(validate_route(&payload, 1024));
     }
@@ -140,6 +197,8 @@ mod tests {
             amount_shannons: 1000,
             active_network_limit: None,
             execute: None,
+            target_asset: None,
+            route_metadata: None,
         };
         assert!(!validate_route(&payload, 1024));
     }
@@ -151,29 +210,22 @@ mod tests {
         let public_key = PublicKey::from_secret_key(&secp, &secret_key);
 
         let payload = MeshPulsePayload {
+            agent_id: 44,
+            timestamp: mesh_unix_timestamp_secs(),
+            nonce: 1,
+            local_capacity_shannons: 1_000,
+            public_key_hex: None,
+            signature_hex: None,
             status: "MESH_HEARTBEAT".to_string(),
-            agent: 44,
             active_mesh_neighbors: vec![45],
             report_target: 44,
             attempt: 0,
-            timestamp: mesh_unix_timestamp_secs(),
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
 
-        let canonical = format!(
-            "telemetry:{}:{}:{}:{}:{}:{}",
-            payload.agent,
-            payload.status,
-            payload.report_target,
-            payload.attempt,
-            payload.timestamp,
-            neighbors_canonical(&payload.active_mesh_neighbors)
-        );
+        let canonical = telemetry_canonical_message(&payload);
         let digest = Sha256::digest(canonical.as_bytes());
         let message = Message::from_digest_slice(&digest).unwrap();
         let signature = secp.sign_ecdsa(&message, &secret_key);
@@ -194,29 +246,22 @@ mod tests {
         let public_key = PublicKey::from_secret_key(&secp, &secret_key);
 
         let payload = MeshPulsePayload {
+            agent_id: 1,
+            timestamp: mesh_unix_timestamp_secs(),
+            nonce: 2,
+            local_capacity_shannons: 500,
+            public_key_hex: None,
+            signature_hex: None,
             status: "ALERT_MFA_NODE_DROPPED".to_string(),
-            agent: 1,
             active_mesh_neighbors: vec![2],
             report_target: 3,
             attempt: 1,
-            timestamp: mesh_unix_timestamp_secs(),
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
 
-        let canonical = format!(
-            "telemetry:{}:{}:{}:{}:{}:{}",
-            payload.agent,
-            payload.status,
-            payload.report_target,
-            payload.attempt,
-            payload.timestamp,
-            neighbors_canonical(&payload.active_mesh_neighbors)
-        );
+        let canonical = telemetry_canonical_message(&payload);
         let digest = Sha256::digest(canonical.as_bytes());
         let message = Message::from_digest_slice(&digest).unwrap();
         let signature = secp.sign_ecdsa(&message, &secret_key);
@@ -226,7 +271,7 @@ mod tests {
             signature_hex: Some(hex::encode(signature.serialize_compact())),
             ..payload
         };
-        signed.attempt = 99;
+        signed.nonce = 99;
 
         assert!(verify_telemetry_signature(&signed).is_err());
     }
@@ -234,18 +279,19 @@ mod tests {
     #[test]
     fn test_verify_telemetry_timestamp_accepts_fresh_payload() {
         let payload = MeshPulsePayload {
+            agent_id: 1,
+            timestamp: mesh_unix_timestamp_secs(),
+            nonce: 1,
+            local_capacity_shannons: 0,
+            public_key_hex: None,
+            signature_hex: None,
             status: "MESH_HEARTBEAT".to_string(),
-            agent: 1,
             active_mesh_neighbors: vec![2],
             report_target: 1,
             attempt: 0,
-            timestamp: mesh_unix_timestamp_secs(),
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
         assert!(verify_telemetry_timestamp(&payload).is_ok());
     }
@@ -253,18 +299,19 @@ mod tests {
     #[test]
     fn test_verify_telemetry_timestamp_rejects_stale_payload() {
         let payload = MeshPulsePayload {
+            agent_id: 1,
+            timestamp: mesh_unix_timestamp_secs().saturating_sub(60),
+            nonce: 1,
+            local_capacity_shannons: 0,
+            public_key_hex: None,
+            signature_hex: None,
             status: "MESH_HEARTBEAT".to_string(),
-            agent: 1,
             active_mesh_neighbors: vec![2],
             report_target: 1,
             attempt: 0,
-            timestamp: mesh_unix_timestamp_secs().saturating_sub(60),
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
         assert!(verify_telemetry_timestamp(&payload).is_err());
     }

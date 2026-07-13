@@ -1,13 +1,22 @@
 import { state, meshEdges } from "./state.js";
 
+/** @typedef {'ring' | 'skip' | 'chord'} MeshLinkKind */
+
+/** @param {number} [n] @returns {number} */
 export function gridDim(n = state.networkSize) {
   return Math.ceil(Math.sqrt(n));
 }
 
+/** @param {number} id @param {number} [totalNodes] @returns {number} */
 export function oppositePeer(id, totalNodes = state.networkSize) {
   return ((id - 1 + Math.floor(totalNodes / 2)) % totalNodes) + 1;
 }
 
+/**
+ * @param {number} agentId
+ * @param {number} [totalNodes]
+ * @returns {Array<{ peer: number, kind: MeshLinkKind }>}
+ */
 export function meshPeerLinks(agentId, totalNodes = state.networkSize) {
   const i = agentId;
   const ring = i === totalNodes ? 1 : i + 1;
@@ -33,7 +42,9 @@ export function buildMeshEdges() {
     const skip = id >= N - 1 ? 1 : id + 2;
     const chord = oppositePeer(id, N);
 
-    for (const [peer, kind] of [[ring, "ring"], [skip, "skip"], [chord, "chord"]]) {
+    /** @type {Array<[number, MeshLinkKind]>} */
+    const links = [[ring, "ring"], [skip, "skip"], [chord, "chord"]];
+    for (const [peer, kind] of links) {
       if (peer > N || peer === id) continue;
       const a = Math.min(id, peer);
       const b = Math.max(id, peer);

@@ -1,0 +1,15 @@
+# Savings cooperative + mobile float.
+[sidecar]
+profile = "coop"
+
+[modules.dicoba]
+enabled = true
+
+[modules.fiat_bridge]
+enabled = true
+provider = "mpesa"
+msisdn = "255711111111"
+critical_fiat_floor = 50000.0
+
+[network]
+mfa_host = "127.0.0.1:1025"

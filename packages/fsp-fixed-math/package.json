@@ -1,0 +1,13 @@
+{
+  "name": "@fspdevs/fsp-fixed-math",
+  "version": "1.0.0",
+  "description": "FSP fixed-point fiat and Shannon math primitives (ESM)",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

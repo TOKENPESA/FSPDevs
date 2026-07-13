@@ -1,4 +1,4 @@
-# Prints CKB testnet address for this FNN node's default funding lock script.
+﻿# Prints CKB testnet address for this FNN node's default funding lock script.
 param(
     [string]$RpcUrl = "http://127.0.0.1:8227"
 )
@@ -10,7 +10,7 @@ if (-not (Test-Path $cli)) {
     Write-Error "fnn-cli.exe not found in $root"
 }
 
-$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "tpxdevs-local" }
+$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "fspdevs-local" }
 
 $json = & $cli -u $RpcUrl info node_info -o json | ConvertFrom-Json
 $script = $json.default_funding_lock_script

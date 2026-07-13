@@ -1,0 +1,188 @@
+/* MFA console extensions — mesh canvas + connection pill */
+
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  box-shadow: 0 0 0 2px var(--warning-soft);
+}
+
+.conn-dot.connected {
+  background: var(--color-success);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.mesh-canvas-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: linear-gradient(160deg, #0a192f 0%, #112240 55%, #0a192f 100%);
+  min-height: 420px;
+}
+
+.mesh-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+}
+
+.mesh-canvas-hint {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 0.65rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 25, 47, 0.72);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
+#fa-tooltip {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  display: none;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 25, 47, 0.92);
+  color: #fff;
+  font-size: var(--text-xs);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+}
+
+.mesh-controls {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.mesh-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.mesh-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mesh-preset-row button,
+.panel-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.7rem;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.mesh-preset-row button:hover,
+.panel-btn:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.panel-btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.panel-btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.workspace-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.workspace-field label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.workspace-field input,
+.workspace-field select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--bg-card);
+}
+
+.event-log-panel {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 520px;
+  overflow: auto;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.event-log-panel li {
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  line-height: var(--leading-snug);
+}
+
+.event-log-panel li.heal { border-left: 3px solid var(--color-success); }
+.event-log-panel li.warn { border-left: 3px solid var(--color-warning); }
+.event-log-panel li.dead { border-left: 3px solid #64748b; }
+.event-log-panel li.liquidity { border-left: 3px solid var(--primary); }
+
+.compliance-stream {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  max-height: 480px;
+  overflow: auto;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #0a192f;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}

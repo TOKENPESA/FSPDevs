@@ -1,4 +1,6 @@
 import { EDGE_NODES_STORAGE_KEY } from "./config.js";
+import { createLogger } from "./logger.js";
+import { $, $button, $input, setText } from "./dom.js";
 import {
   applyEdgeNodeCount,
   routeTransaction,
@@ -11,11 +13,12 @@ import {
   nodeStatus,
   updateTooltip,
 } from "./canvas/tooltip.js";
-import { connectMonitor } from "./events/monitor.js";
+import { connectMonitor, handleVersionedMonitorEnvelope, initializeMonitorSocket } from "./events/monitor.js";
 import { tickPaymentTransfer } from "./events/payment.js";
 import { updateHubPanel } from "./events/liquidity.js";
-import { logEvent, markDirty, state } from "./state.js";
+import { appendLogEvent, logEvent, markDirty, state, updateNodeVisualState } from "./state.js";
 import { buildMeshEdges } from "./topology.js";
+import { initSidecarConsole } from "./sidecar-console.js";
 
 export const DASHBOARD_VERSION = "1.0.0";
 
@@ -45,28 +48,32 @@ export {
 /**
  * Boots the full Fiber mesh dashboard when the standard demo shell is present.
  * Third-party embeds can import exports above and wire their own DOM instead.
+ * @param {{ autoConnect?: boolean }} [opts]
  */
 export function initFiberDashboard({ autoConnect = true } = {}) {
-  const metricHover = document.getElementById("metric-hover");
-  const speedInput = document.getElementById("speed");
-  const speedLabel = document.getElementById("speed-label");
-  const btnPlay = document.getElementById("btn-play");
-  const btnPause = document.getElementById("btn-pause");
-  const sizeInput = document.getElementById("network-size");
-  const edgeCountInput = document.getElementById("edge-node-count");
-  const edgePresets = document.getElementById("edge-presets");
+  const metricHover = $("metric-hover");
+  const speedInput = $input("speed");
+  const speedLabel = $("speed-label");
+  const btnPlay = $button("btn-play");
+  const btnPause = $button("btn-pause");
+  const sizeInput = $input("network-size");
+  const edgeCountInput = $input("edge-node-count");
+  const edgePresets = $("edge-presets");
 
-  if (!canvas || !metricHover || !speedInput || !btnPlay || !btnPause) {
+  if (!metricHover || !speedInput || !btnPlay || !btnPause) {
     throw new Error(
       "initFiberDashboard: required dashboard DOM nodes are missing (expected #grid, controls, metrics)",
     );
   }
 
+  const playButton = btnPlay;
+  const pauseButton = btnPause;
+
   function syncPlaybackControls() {
-    btnPlay.classList.toggle("playback-active", state.playing);
-    btnPause.classList.toggle("playback-active", !state.playing);
-    btnPlay.setAttribute("aria-pressed", String(state.playing));
-    btnPause.setAttribute("aria-pressed", String(!state.playing));
+    playButton.classList.toggle("playback-active", state.playing);
+    pauseButton.classList.toggle("playback-active", !state.playing);
+    playButton.setAttribute("aria-pressed", String(state.playing));
+    pauseButton.setAttribute("aria-pressed", String(!state.playing));
   }
 
   let mouseRaf = 0;
@@ -125,13 +132,13 @@ export function initFiberDashboard({ autoConnect = true } = {}) {
   document.getElementById("btn-route")?.addEventListener("click", () => {
     routeTransaction();
   });
-  btnPlay.addEventListener("click", () => {
+  playButton.addEventListener("click", () => {
     state.playing = true;
     syncPlaybackControls();
     markDirty();
     logEvent("Animation playing");
   });
-  btnPause.addEventListener("click", () => {
+  pauseButton.addEventListener("click", () => {
     state.playing = false;
     syncPlaybackControls();
     markDirty();
@@ -139,7 +146,7 @@ export function initFiberDashboard({ autoConnect = true } = {}) {
   });
   speedInput.addEventListener("input", () => {
     state.speed = Number(speedInput.value);
-    speedLabel.textContent = `${state.speed}×`;
+    setText(speedLabel, `${state.speed}×`);
     markDirty();
   });
 
@@ -152,8 +159,10 @@ export function initFiberDashboard({ autoConnect = true } = {}) {
   });
 
   edgePresets?.addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button[data-n]");
-    if (!btn) return;
+    const target = ev.target;
+    if (!(target instanceof Element)) return;
+    const btn = target.closest("button[data-n]");
+    if (!(btn instanceof HTMLButtonElement)) return;
     applyEdgeNodeCount(btn.dataset.n);
   });
 
@@ -169,6 +178,7 @@ export function initFiberDashboard({ autoConnect = true } = {}) {
   syncPlaybackControls();
   updateHubPanel();
 
+  /** @param {number} now */
   function frame(now) {
     if (!state.animTime) state.animTime = now;
     if (state.playing) {
@@ -198,15 +208,27 @@ export function initFiberDashboard({ autoConnect = true } = {}) {
 
   return {
     state,
-  connectMonitor,
-  handleVersionedMonitorEnvelope,
-  initializeMonitorSocket,
-  layoutNodes,
+    connectMonitor,
+    handleVersionedMonitorEnvelope,
+    initializeMonitorSocket,
+    layoutNodes,
     drawConstellation,
     routeTransaction,
   };
 }
 
-if (typeof document !== "undefined" && document.getElementById("grid")) {
-  initFiberDashboard();
+const log = createLogger("fiber-dashboard");
+
+if (typeof document !== "undefined" && document.getElementById("grid") && document.querySelector(".canvas-wrap")) {
+  try {
+    initFiberDashboard();
+  } catch (err) {
+    log.error("init failed", err);
+  }
+}
+
+if (typeof document !== "undefined" && document.getElementById("console-stream")) {
+  void initSidecarConsole().catch((err) => {
+    log.error("sidecar console init failed", err);
+  });
 }

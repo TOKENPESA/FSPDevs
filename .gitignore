@@ -17,9 +17,23 @@ node_modules/
 # Audit / release archives (regenerate locally)
 *.zip
 *.tgz
+FSPDevs-code-audit-v*/
 TPXDevs-code-audit-v*/
+TPXDevs-gemini-audit-*/
+FSPDevs-gemini-audit-*/
 
-# Upstream Fiber monorepo (not part of TPXDevs workspace)
+# Environment secrets (keep tracked examples)
+fsp-console/.env
+fsp-console/.env.*
+!fsp-console/.env.example
+
+# MFA local supervisor runtime state
+master-fiber-agent/.mfa-supervisor/
+
+# Transient tooling output
+typecheck-errors.txt
+
+# Upstream Fiber monorepo (not part of FSPDevs workspace)
 fiber/
 
 # OS / editor

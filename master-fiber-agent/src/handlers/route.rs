@@ -1,6 +1,9 @@
+use mesh_core::types::L2Asset;
+use serde_json::Value;
 use crate::payment::dispatch_route_payment;
 use crate::state::AppState;
 use crate::telemetry::validate_route;
+use crate::traits::{ClearanceVerdict, RoutingIntent};
 use crate::types::{RouteRequestPayload, RouteResponse};
 use axum::{
     extract::State,
@@ -67,13 +70,22 @@ pub async fn calculate_transaction_route_handler(
             - start_time
     };
 
-    let path = match graph_read.compute_multi_hop_route(
+    let target_asset = payload
+        .target_asset
+        .clone()
+        .unwrap_or(L2Asset::CkbNative);
+
+    let route_result = graph_read.compute_asset_route(
         payload.source,
         payload.destination,
         payload.amount_shannons,
-        max_bound,
-    ) {
-        Some(path) => path,
+        target_asset.clone(),
+        Some(max_bound),
+        Some(&state.plugin_registry),
+    );
+
+    let (path, _route_cost) = match route_result {
+        Some(result) => result,
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -91,6 +103,53 @@ pub async fn calculate_transaction_route_handler(
         }
     };
     drop(graph_read);
+
+    let routing_intent = RoutingIntent {
+        source: payload.source,
+        destination: payload.destination,
+        amount_atomic: payload.amount_shannons,
+        target_asset,
+        path: path.clone(),
+        metadata: payload.route_metadata.clone().unwrap_or(Value::Null),
+    };
+
+    match state
+        .plugin_registry
+        .pre_route_clearance(&routing_intent)
+        .await
+    {
+        Ok(ClearanceVerdict::Approved) => {}
+        Ok(ClearanceVerdict::Rejected(reason)) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(RouteResponse {
+                    status: "POLICY_REJECTED".to_string(),
+                    path: Vec::new(),
+                    execution_latency_ms: latency(),
+                    payment_status: None,
+                    payment_hash: None,
+                    payment_error: Some(reason),
+                    payment_fee_shannons: None,
+                }),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RouteResponse {
+                    status: "POLICY_ERROR".to_string(),
+                    path: Vec::new(),
+                    execution_latency_ms: latency(),
+                    payment_status: None,
+                    payment_hash: None,
+                    payment_error: Some(err.to_string()),
+                    payment_fee_shannons: None,
+                }),
+            )
+                .into_response();
+        }
+    }
 
     if execute {
         let mut payment_response = dispatch_route_payment(

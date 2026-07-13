@@ -1,8 +1,11 @@
+use mesh_core::types::{AssetCapacity, L2Asset};
 use mesh_core::{chord_peer, valid_agent_id, CHANNEL_LIQUIDITY, MeshError, RING_SIZE};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+/// Per-edge liquidity partitioned by exact `L2Asset` identity (CKB, RGB++, xUDT).
+pub type AssetCapacityMap = HashMap<L2Asset, u64>;
 
 // ================================================================================
 // 1. FIBER GOSSIP NETWORK DTOs (Data Transfer Objects)
@@ -35,6 +38,8 @@ pub struct FnnChannelUpdate {
     pub is_enabled: bool,
     pub local_balance_shannons: u64,
     pub timestamp: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_balances: Option<Vec<AssetCapacity>>,
 }
 
 // ================================================================================
@@ -46,11 +51,46 @@ pub struct LiveMeshEdge {
     pub channel_id: String,
     pub peer_id: u16,
     pub peer_pubkey: String,
+    /// CKB-native scalar mirror for legacy telemetry and fee routing.
     pub capacity_shannons: u64,
+    /// Multi-indexed outbound liquidity keyed by exact `L2Asset` variant.
+    pub asset_capacities: AssetCapacityMap,
     pub fee_base: u64,
     pub fee_proportional: u64,
     pub is_active: bool,
     pub last_update_timestamp: u64,
+}
+
+impl LiveMeshEdge {
+    pub fn capacity_for(&self, asset: &L2Asset) -> u64 {
+        self.asset_capacities
+            .get(asset)
+            .copied()
+            .unwrap_or({
+                if matches!(asset, L2Asset::CkbNative) {
+                    self.capacity_shannons
+                } else {
+                    0
+                }
+            })
+    }
+
+    pub fn set_asset_capacity(&mut self, asset: L2Asset, amount: u64) {
+        if amount == 0 {
+            self.asset_capacities.remove(&asset);
+        } else {
+            self.asset_capacities.insert(asset.clone(), amount);
+        }
+        if matches!(asset, L2Asset::CkbNative) {
+            self.capacity_shannons = amount;
+        }
+    }
+
+    pub fn apply_capacity_snapshot(&mut self, capacities: &[AssetCapacity]) {
+        for cap in capacities {
+            self.set_asset_capacity(cap.asset.clone(), cap.amount_atomic);
+        }
+    }
 }
 
 pub struct CompleteMeshGraph {
@@ -61,6 +101,12 @@ pub struct CompleteMeshGraph {
     pub known_channels: HashMap<String, (String, String, u64)>,
     /// Agents marked offline by healing / fault isolation.
     offline_registry: HashSet<u16>,
+}
+
+impl Default for CompleteMeshGraph {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CompleteMeshGraph {
@@ -101,6 +147,10 @@ impl CompleteMeshGraph {
                 ],
             );
         }
+    }
+
+    pub fn is_node_offline(&self, agent: u16) -> bool {
+        self.offline_registry.contains(&agent)
     }
 
     #[inline]
@@ -156,32 +206,76 @@ impl CompleteMeshGraph {
         self.bump_topology_version();
     }
 
-    /// Mirrors live outbound liquidity from sidecar heartbeats into routing edges.
+    /// Mirrors live outbound CKB liquidity from sidecar heartbeats into routing edges.
     pub fn apply_heartbeat_liquidity(&mut self, agent: u16, outbound_shannons: u64) {
         if !valid_agent_id(agent) || outbound_shannons == 0 {
             return;
         }
         if let Some(edges) = self.adjacency_map.get_mut(&agent) {
             for edge in edges.iter_mut().filter(|e| e.is_active) {
-                edge.capacity_shannons = outbound_shannons;
+                edge.set_asset_capacity(L2Asset::CkbNative, outbound_shannons);
             }
         }
         self.bump_topology_version();
     }
 
-    /// Minimum active edge capacity for an agent (routing-layer liquidity floor).
-    pub fn min_active_outbound_capacity(&self, agent: u16) -> Option<u64> {
+    /// Updates per-asset outbound balances from multi-asset heartbeat telemetry.
+    pub fn apply_heartbeat_multi_asset_liquidity(
+        &mut self,
+        agent: u16,
+        capacities: &[AssetCapacity],
+    ) {
+        if !valid_agent_id(agent) || capacities.is_empty() {
+            return;
+        }
+        if let Some(edges) = self.adjacency_map.get_mut(&agent) {
+            for edge in edges.iter_mut().filter(|e| e.is_active) {
+                edge.apply_capacity_snapshot(capacities);
+            }
+        }
+        self.bump_topology_version();
+    }
+
+    /// Applies post-settlement liquidity pulse for a single asset on a directed edge.
+    pub fn apply_settlement_asset_pulse(
+        &mut self,
+        source: u16,
+        peer_id: u16,
+        asset: L2Asset,
+        amount_atomic: u64,
+    ) {
+        if !valid_agent_id(source) {
+            return;
+        }
+        if let Some(edges) = self.adjacency_map.get_mut(&source) {
+            for edge in edges
+                .iter_mut()
+                .filter(|e| e.is_active && e.peer_id == peer_id)
+            {
+                edge.set_asset_capacity(asset.clone(), amount_atomic);
+            }
+        }
+        self.bump_topology_version();
+    }
+
+    /// Minimum active outbound capacity for an agent and specific asset.
+    pub fn min_active_outbound_capacity_for(&self, agent: u16, asset: &L2Asset) -> Option<u64> {
         self.adjacency_map.get(&agent).map(|edges| {
             edges
                 .iter()
                 .filter(|e| e.is_active)
-                .map(|e| e.capacity_shannons)
+                .map(|e| e.capacity_for(asset))
                 .min()
                 .unwrap_or(0)
         })
     }
 
-    /// Legacy route API used by `/route` — delegates to fee-aware `find_route`.
+    /// Legacy scalar floor — CKB-native minimum across active edges.
+    pub fn min_active_outbound_capacity(&self, agent: u16) -> Option<u64> {
+        self.min_active_outbound_capacity_for(agent, &L2Asset::CkbNative)
+    }
+
+    /// Legacy route API — CKB-native asset routing via asset-aware engine.
     pub fn compute_multi_hop_route(
         &self,
         start: u16,
@@ -189,25 +283,51 @@ impl CompleteMeshGraph {
         amount: u64,
         network_limit: u16,
     ) -> Option<Vec<u16>> {
-        if start == 0
-            || end == 0
-            || start > network_limit
-            || end > network_limit
-            || amount == 0
-        {
-            return None;
-        }
         self.find_route(start, end, amount, Some(network_limit))
             .map(|(path, _)| path)
+    }
+
+    /// Asset-aware multi-hop route for RGB++, xUDT, or CKB transfers.
+    pub fn compute_asset_route(
+        &self,
+        start: u16,
+        end: u16,
+        amount: u64,
+        target_asset: L2Asset,
+        network_limit: Option<u16>,
+        plugins: Option<&crate::plugin_registry::PluginRegistry>,
+    ) -> Option<(Vec<u16>, u64)> {
+        if start == 0 || end == 0 || amount == 0 {
+            return None;
+        }
+        if let Some(limit) = network_limit {
+            if start > limit || end > limit {
+                return None;
+            }
+        }
+        crate::routing::find_asset_aware_route(
+            self,
+            crate::routing::RouteQuery {
+                source: start,
+                destination: end,
+                required_amount: amount,
+                target_asset,
+                network_limit,
+            },
+            plugins,
+        )
     }
 }
 
 fn sim_edge(source: u16, peer: u16) -> LiveMeshEdge {
+    let mut asset_capacities = AssetCapacityMap::new();
+    asset_capacities.insert(L2Asset::CkbNative, CHANNEL_LIQUIDITY);
     LiveMeshEdge {
         channel_id: format!("sim-{source}-{peer}"),
         peer_id: peer,
         peer_pubkey: String::new(),
         capacity_shannons: CHANNEL_LIQUIDITY,
+        asset_capacities,
         fee_base: 0,
         fee_proportional: 0,
         is_active: true,
@@ -277,7 +397,10 @@ impl CompleteMeshGraph {
             .find(|e| e.channel_id == update.channel_id)
         {
             if update.timestamp >= edge.last_update_timestamp {
-                edge.capacity_shannons = update.local_balance_shannons;
+                edge.set_asset_capacity(L2Asset::CkbNative, update.local_balance_shannons);
+                if let Some(ref balances) = update.asset_balances {
+                    edge.apply_capacity_snapshot(balances);
+                }
                 edge.fee_base = update.fee_base_shannons;
                 edge.fee_proportional = update.fee_proportional_millionths;
                 edge.is_active = update.is_enabled;
@@ -286,11 +409,19 @@ impl CompleteMeshGraph {
                 edge.last_update_timestamp = update.timestamp;
             }
         } else {
+            let mut asset_capacities = AssetCapacityMap::new();
+            asset_capacities.insert(L2Asset::CkbNative, update.local_balance_shannons);
+            if let Some(ref balances) = update.asset_balances {
+                for cap in balances {
+                    asset_capacities.insert(cap.asset.clone(), cap.amount_atomic);
+                }
+            }
             edges.push(LiveMeshEdge {
                 channel_id: update.channel_id,
                 peer_id,
                 peer_pubkey,
                 capacity_shannons: update.local_balance_shannons,
+                asset_capacities,
                 fee_base: update.fee_base_shannons,
                 fee_proportional: update.fee_proportional_millionths,
                 is_active: update.is_enabled,
@@ -304,28 +435,11 @@ impl CompleteMeshGraph {
 }
 
 // ================================================================================
-// 4. LIVE CAPACITY & FEE-AWARE DIJKSTRA ROUTING
+// 4. LIVE CAPACITY & FEE-AWARE ROUTING (delegates to asset-aware engine)
 // ================================================================================
 
-#[derive(Clone, Eq, PartialEq)]
-struct NodeScore {
-    node: u16,
-    cost_shannons: u64,
-}
-
-impl Ord for NodeScore {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other.cost_shannons.cmp(&self.cost_shannons)
-    }
-}
-
-impl PartialOrd for NodeScore {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 impl CompleteMeshGraph {
+    /// CKB-native shortest path — backward-compatible wrapper.
     pub fn find_route(
         &self,
         source: u16,
@@ -333,70 +447,53 @@ impl CompleteMeshGraph {
         amount_shannons: u64,
         network_limit: Option<u16>,
     ) -> Option<(Vec<u16>, u64)> {
-        if amount_shannons == 0 {
-            return None;
+        self.compute_asset_route(
+            source,
+            destination,
+            amount_shannons,
+            L2Asset::CkbNative,
+            network_limit,
+            None,
+        )
+    }
+}
+
+/// Serializable mesh graph snapshot (hot-path graph uses atomics that cannot be serde'd directly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphSnapshot {
+    pub adjacency_map: HashMap<u16, Vec<LiveMeshEdge>>,
+    pub pubkey_to_agent_id: HashMap<String, u16>,
+    pub agent_id_to_pubkey: HashMap<u16, String>,
+    pub topology_version: u64,
+    pub known_channels: HashMap<String, (String, String, u64)>,
+    pub offline_agents: Vec<u16>,
+}
+
+impl CompleteMeshGraph {
+    pub fn to_snapshot(&self) -> GraphSnapshot {
+        GraphSnapshot {
+            adjacency_map: self.adjacency_map.clone(),
+            pubkey_to_agent_id: self.pubkey_to_agent_id.clone(),
+            agent_id_to_pubkey: self.agent_id_to_pubkey.clone(),
+            topology_version: self.get_version(),
+            known_channels: self.known_channels.clone(),
+            offline_agents: self.offline_registry.iter().copied().collect(),
         }
+    }
 
-        let mut distances = HashMap::new();
-        let mut parents = HashMap::new();
-        let mut heap = BinaryHeap::new();
-
-        distances.insert(source, 0);
-        heap.push(NodeScore {
-            node: source,
-            cost_shannons: 0,
-        });
-
-        while let Some(NodeScore { node, cost_shannons }) = heap.pop() {
-            if node == destination {
-                let mut path = Vec::new();
-                let mut curr = destination;
-                while curr != source {
-                    path.push(curr);
-                    curr = *parents.get(&curr)?;
-                }
-                path.push(source);
-                path.reverse();
-                return Some((path, cost_shannons));
-            }
-
-            if let Some(&best_dist) = distances.get(&node) {
-                if cost_shannons > best_dist {
-                    continue;
-                }
-            }
-
-            if let Some(edges) = self.adjacency_map.get(&node) {
-                for edge in edges {
-                    if !edge.is_active || edge.capacity_shannons < amount_shannons {
-                        continue;
-                    }
-                    if self.offline_registry.contains(&edge.peer_id) {
-                        continue;
-                    }
-                    if network_limit.is_some_and(|limit| edge.peer_id > limit) {
-                        continue;
-                    }
-
-                    let hop_fee = edge.fee_base
-                        + (amount_shannons.saturating_mul(edge.fee_proportional)) / 1_000_000;
-                    let next_cost = cost_shannons
-                        .saturating_add(amount_shannons)
-                        .saturating_add(hop_fee);
-
-                    let current_best = distances.get(&edge.peer_id).copied().unwrap_or(u64::MAX);
-                    if next_cost < current_best {
-                        distances.insert(edge.peer_id, next_cost);
-                        parents.insert(edge.peer_id, node);
-                        heap.push(NodeScore {
-                            node: edge.peer_id,
-                            cost_shannons: next_cost,
-                        });
-                    }
-                }
-            }
+    pub fn from_snapshot(snapshot: GraphSnapshot) -> Self {
+        Self {
+            adjacency_map: snapshot.adjacency_map,
+            pubkey_to_agent_id: snapshot.pubkey_to_agent_id,
+            agent_id_to_pubkey: snapshot.agent_id_to_pubkey,
+            topology_version: AtomicU64::new(snapshot.topology_version),
+            known_channels: snapshot.known_channels,
+            offline_registry: snapshot.offline_agents.into_iter().collect(),
         }
-        None
+    }
+
+    pub fn restore_from_snapshot(&mut self, snapshot: GraphSnapshot) {
+        *self = Self::from_snapshot(snapshot);
     }
 }
 
@@ -475,6 +572,7 @@ mod tests {
                 is_enabled: true,
                 local_balance_shannons: 500_000,
                 timestamp: 42,
+                asset_balances: None,
             })
             .expect("apply update");
 
@@ -498,6 +596,11 @@ mod tests {
                 peer_id: 2,
                 peer_pubkey: String::new(),
                 capacity_shannons: CHANNEL_LIQUIDITY,
+                asset_capacities: {
+                    let mut m = AssetCapacityMap::new();
+                    m.insert(L2Asset::CkbNative, CHANNEL_LIQUIDITY);
+                    m
+                },
                 fee_base: 100,
                 fee_proportional: 0,
                 is_active: true,
@@ -551,6 +654,7 @@ mod tests {
                 is_enabled: true,
                 local_balance_shannons: 10_000_000,
                 timestamp: 200,
+                asset_balances: None,
             })
             .unwrap();
 
@@ -559,5 +663,28 @@ mod tests {
 
         let route_fail = graph.find_route(1, 2, 15_000_000, None);
         assert!(route_fail.is_none());
+    }
+
+    #[test]
+    fn heartbeat_multi_asset_updates_partitioned_capacities() {
+        let mut graph = CompleteMeshGraph::with_lattice(8);
+        let capacities = vec![
+            mesh_core::types::AssetCapacity::rgb_plus_plus("0xrgb", 2_000_000, None),
+            mesh_core::types::AssetCapacity::new(L2Asset::UDT("0xudt".to_string()), 3_000_000),
+        ];
+        graph.apply_heartbeat_multi_asset_liquidity(1, &capacities);
+        let edge = graph
+            .adjacency_map
+            .get(&1)
+            .and_then(|edges| edges.first())
+            .expect("edge");
+        assert_eq!(
+            edge.capacity_for(&L2Asset::RgbPlusPlus("0xrgb".to_string())),
+            2_000_000
+        );
+        assert_eq!(
+            edge.capacity_for(&L2Asset::UDT("0xudt".to_string())),
+            3_000_000
+        );
     }
 }

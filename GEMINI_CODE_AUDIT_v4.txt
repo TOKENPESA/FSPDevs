@@ -1,5 +1,5 @@
-================================================================================
-TPXDevs — CODE HEALTH & SECURITY AUDIT (v4.1 — post sidecar + FNN bridge)
+﻿================================================================================
+FSPDevs — CODE HEALTH & SECURITY AUDIT (v4.1 — post sidecar + FNN bridge)
 ================================================================================
 
 You are a principal security engineer + distributed systems architect.
@@ -7,14 +7,14 @@ Review this codebase and answer: **Is the code OK?** — meaning correct, secure
 enough for its stated scope (local mesh simulation + FNN sidecar bridge), and
 free of critical bugs.
 
-Upload and analyze: **TPXDevs-code-audit-v4.zip** (regenerate to include sidecar)
+Upload and analyze: **FSPDevs-code-audit-v4.zip** (regenerate to include sidecar)
 Companion: SIMULATION_BASE.txt, FIBER_TESTNET_READINESS_REVIEW.txt
 
 ================================================================================
 PROJECT OVERVIEW
 ================================================================================
 
-TPXDevs is a 1024-node FiberAgent mesh **simulation** with 4 runtime tiers:
+FSPDevs is a 1024-node FiberAgent mesh **simulation** with 4 runtime tiers:
 
 TIER 1 — Fiber Network Node (FNN v0.8.1 release binary)
   Path: fnn-testnet/ (local runtime, not in audit zip)
@@ -104,7 +104,7 @@ Native sidecar (fiber-agent/):
 FNN local deployment (fnn-testnet/):
   ✓ fnn_v0.8.1 Windows release binary
   ✓ start-testnet.ps1 / stop-testnet.ps1 / setup-testnet-key.ps1
-  ✓ Dev CKB key, password tpxdevs-local
+  ✓ Dev CKB key, password fspdevs-local
 
 Telemetry (MFA + agents):
   ✓ MeshPulsePayload optional crypto fields (public_key_hex, signature_hex) — stub

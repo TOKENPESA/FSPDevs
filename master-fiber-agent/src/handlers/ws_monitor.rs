@@ -1,4 +1,4 @@
-use crate::auth::validate_ws_origin;
+use crate::auth::check_websocket_handshake_origin;
 use crate::state::AppState;
 use axum::extract::ws::{Message as AxumMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -13,7 +13,7 @@ pub async fn ui_monitor_ws_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    if let Err(status) = validate_ws_origin(&headers, &state.ws_allowed_origins) {
+    if let Err(status) = check_websocket_handshake_origin(&headers, &state.ws_allowed_origins) {
         return status.into_response();
     }
 

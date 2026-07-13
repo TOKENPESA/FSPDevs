@@ -1,3 +1,5 @@
+/** @typedef {import('../types.js').PathPoint} PathPoint */
+
 import {
   PAYMENT_SETTLE_DISPLAY_MS,
   PAYMENT_TRAVEL_CAP,
@@ -18,10 +20,12 @@ import { nodeStatus, updateTooltip } from "../canvas/tooltip.js";
 const metricRoute = document.getElementById("metric-route");
 const metricHover = document.getElementById("metric-hover");
 
+/** @param {number} pathLen @returns {number} */
 export function paymentTravelDurationMs(pathLen) {
   return 1200 + Math.max(0, pathLen - 1) * 450;
 }
 
+/** @param {number[]} path @param {number} progress @returns {PathPoint | null} */
 export function pathPointAtProgress(path, progress) {
   if (!path || path.length < 2) return null;
   const totalSegs = path.length - 1;
@@ -39,6 +43,7 @@ export function pathPointAtProgress(path, progress) {
   };
 }
 
+/** @param {number} source @param {number} dest @param {number} amount @param {number} [fee] */
 function applyDashboardPaymentBalances(source, dest, amount, fee = 0) {
   const srcPrev = resolveNodeBalances(source);
   const dstPrev = resolveNodeBalances(dest);
@@ -62,6 +67,7 @@ function applyDashboardPaymentBalances(source, dest, amount, fee = 0) {
   );
 }
 
+/** @param {number[]} path @param {number} source @param {number} destination @param {number} amount */
 export function startPaymentTransfer(path, source, destination, amount) {
   if (state.paymentTransfer?.clearTimer) {
     clearTimeout(state.paymentTransfer.clearTimer);
@@ -78,10 +84,11 @@ export function startPaymentTransfer(path, source, destination, amount) {
     clearTimer: null,
   };
   state.activeRoute = [...path];
-  metricRoute.textContent = "in flight…";
+  if (metricRoute) metricRoute.textContent = "in flight…";
   markDirty();
 }
 
+/** @param {boolean} success @param {number} [fee] */
 export function settlePaymentTransfer(success, fee = 0) {
   const pt = state.paymentTransfer;
   if (!pt || pt.phase === "settled" || pt.phase === "failed") return;
@@ -94,20 +101,20 @@ export function settlePaymentTransfer(success, fee = 0) {
     if (success) {
       current.progress = 1;
       applyDashboardPaymentBalances(current.source, current.destination, current.amount, fee);
-      metricRoute.textContent = `delivered → FA-${current.destination}`;
+      if (metricRoute) metricRoute.textContent = `delivered → FA-${current.destination}`;
       logEvent(
         `Funds arrived at FA-${current.destination} · +${formatShannons(current.amount)}`,
         "heal",
       );
     } else {
-      metricRoute.textContent = "payment failed";
+      if (metricRoute) metricRoute.textContent = "payment failed";
     }
 
     current.clearTimer = setTimeout(() => {
       if (state.paymentTransfer === current) {
         state.paymentTransfer = null;
         state.activeRoute = [];
-        metricRoute.textContent = "—";
+        if (metricRoute) metricRoute.textContent = "—";
         markDirty();
       }
     }, PAYMENT_SETTLE_DISPLAY_MS);
@@ -119,7 +126,7 @@ export function settlePaymentTransfer(success, fee = 0) {
       if (ptr && state.hoveredNode) {
         updateTooltip(state.hoveredNode, ptr.clientX, ptr.clientY);
         const st = nodeStatus(state.hoveredNode);
-        metricHover.textContent = `FA-${state.hoveredNode} · ${st.label}`;
+        if (metricHover) metricHover.textContent = `FA-${state.hoveredNode} · ${st.label}`;
       }
     }
   };
@@ -133,6 +140,7 @@ export function settlePaymentTransfer(success, fee = 0) {
   finish();
 }
 
+/** @param {number} now */
 export function tickPaymentTransfer(now) {
   const pt = state.paymentTransfer;
   if (!pt || pt.phase !== "traveling") return;
@@ -143,14 +151,15 @@ export function tickPaymentTransfer(now) {
   markDirty();
 }
 
+/** @param {Record<string, unknown>} payload @returns {boolean} */
 export function handlePaymentEvent(payload) {
   if (payload.event === "PAYMENT_STARTED") {
     if (Array.isArray(payload.path) && payload.path.length >= 2) {
       startPaymentTransfer(
-        payload.path,
-        payload.source,
-        payload.destination,
-        payload.amount_shannons ?? 0,
+        payload.path.map(Number),
+        Number(payload.source),
+        Number(payload.destination),
+        Number(payload.amount_shannons ?? 0),
       );
     }
     logEvent(
@@ -167,13 +176,13 @@ export function handlePaymentEvent(payload) {
     );
     if (!state.paymentTransfer && Array.isArray(payload.path) && payload.path.length >= 2) {
       startPaymentTransfer(
-        payload.path,
-        payload.source,
-        payload.destination,
-        payload.amount_shannons ?? 0,
+        payload.path.map(Number),
+        Number(payload.source),
+        Number(payload.destination),
+        Number(payload.amount_shannons ?? 0),
       );
     }
-    settlePaymentTransfer(true, payload.fee_shannons ?? 0);
+    settlePaymentTransfer(true, Number(payload.fee_shannons ?? 0));
     return true;
   }
   if (payload.event === "PAYMENT_FAILED") {

@@ -1,16 +1,22 @@
-# Serve dashboard on :8088 (required for MFA CORS / monitor WebSocket).
+# Serve MFA Operations Console on :8088 (required for MFA CORS / monitor WebSocket).
 $ErrorActionPreference = "Stop"
 $repo = Split-Path $PSScriptRoot -Parent
 
-$on8088 = Get-NetTCPConnection -LocalPort 8088 -State Listen -ErrorAction SilentlyContinue
-if ($on8088) {
-    $pid = ($on8088 | Select-Object -First 1).OwningProcess
+function Stop-DashboardListener {
+    $conn = Get-NetTCPConnection -LocalPort 8088 -State Listen -ErrorAction SilentlyContinue
+    if (-not $conn) { return }
+    $pid = ($conn | Select-Object -First 1).OwningProcess
     $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
-    Write-Host "Dashboard already on http://localhost:8088 (PID $pid, $($proc.ProcessName))" -ForegroundColor Green
-    Write-Host "Open that URL — do not use a second serve on another port."
-    exit 0
+    if ($proc -and $proc.ProcessName -match "node") {
+        Write-Host "Stopping stale dashboard server (PID $pid)..." -ForegroundColor Yellow
+        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
 }
 
+Stop-DashboardListener
+
 Set-Location $repo
-Write-Host "Starting dashboard at http://localhost:8088 ..." -ForegroundColor Cyan
-npm run serve:dashboard
+Write-Host "Starting MFA Operations Console at http://127.0.0.1:8088/" -ForegroundColor Cyan
+Write-Host "Legacy mesh visualizer: http://127.0.0.1:8088/index-legacy.html" -ForegroundColor DarkGray
+npm run serve:mfa

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fiber Sidecar Protocol (FSP) Sovereign Audit Suite</title>
+  <style>
+    :root {
+      --bg-gov: #050811;
+      --card-gov: #0d1322;
+      --border-gov: #1e293b;
+      --text-clean: #10b981;
+      --text-flag: #fbbf24;
+      --text-block: #ef4444;
+      --sky: #38bdf8;
+    }
+    body { background: var(--bg-gov); color: #f1f5f9; font-family: system-ui, sans-serif; padding: 2rem; margin: 0; }
+    header { border-bottom: 2px solid var(--border-gov); padding-bottom: 1rem; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; }
+    .grid-gov { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; }
+    .panel { background: var(--card-gov); border: 1px solid var(--border-gov); border-radius: 8px; padding: 1.5rem; }
+    .ledger-scroll { background: #02040a; border: 1px solid var(--border-gov); height: 500px; overflow-y: auto; font-family: monospace; padding: 1rem; border-radius: 4px; font-size: 0.85rem; line-height: 1.6; }
+    .stat-box { text-align: center; padding: 1.5rem; background: #111a30; border: 1px solid var(--border-gov); border-radius: 6px; margin-bottom: 1rem; }
+    .stat-val { font-size: 2.25rem; font-weight: 800; color: var(--sky); margin-top: 0.5rem; }
+    .badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
+    .CLEARED { background: rgba(16, 185, 129, 0.15); color: var(--text-clean); border: 1px solid var(--text-clean); }
+    .FLAGGED { background: rgba(251, 191, 36, 0.15); color: var(--text-flag); border: 1px solid var(--text-flag); }
+    .BLOCKED { background: rgba(239, 68, 68, 0.15); color: var(--text-block); border: 1px solid var(--text-block); font-weight: 900; animation: flash 1s infinite alternate; }
+    .OFFLINE { background: rgba(100, 116, 139, 0.15); color: #94a3b8; border: 1px solid #64748b; }
+    @keyframes flash { from { opacity: 1; } to { opacity: 0.5; } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1 style="margin:0; font-size: 1.5rem; letter-spacing: -0.02em;">🏛️ Fiber Sidecar Protocol (FSP) Sovereign Surveillance Dashboard</h1>
+      <p style="margin: 5px 0 0 0; color: #64748b; font-size: 0.85rem;">Live Macroprudential Supervision & Revenue Audit Feed (June 2026 Deployment)</p>
+    </div>
+    <div style="text-align: right;">
+      <span style="font-size: 0.8rem; color:#64748b;"> mTLS Node Pipeline Status:</span>
+      <span id="pipeline-status" class="badge OFFLINE" style="font-size: 0.8rem;">⏳ CONNECTING</span>
+    </div>
+  </header>
+
+  <div class="grid-gov">
+    <main class="panel">
+      <h2 style="font-size: 1rem; margin-top:0; color:#94a3b8; text-transform: uppercase;">Cryptographic Live Audit Stream</h2>
+      <div id="audit-terminal" class="ledger-scroll">
+        <div style="color:#64748b;">[SYSTEM CONNECT] Initializing handshake authorization sequences with the supervisor endpoint...</div>
+      </div>
+    </main>
+
+    <aside style="display: flex; flex-direction: column;">
+      <div class="panel" style="flex:1;">
+        <h2 style="font-size: 1rem; margin-top:0; color:#94a3b8; text-transform: uppercase;">Revenue Audit Collection</h2>
+        <div class="stat-box">
+          <p style="margin:0; color:#94a3b8; font-size:0.85rem;">Aggregate Taxes Extracted (24h)</p>
+          <div id="tax-total" class="stat-val">TZS 14,240,500</div>
+        </div>
+
+        <h2 style="font-size: 1rem; margin-top:1.5rem; color:#94a3b8; text-transform: uppercase;">Macroprudential Boundaries</h2>
+        <div class="stat-box" style="background: #1c1216; border-color: rgba(239, 108, 108, 0.2);">
+          <p style="margin:0; color:#94a3b8; font-size:0.85rem;">Active Corridor Outflow Velocity</p>
+          <div id="corridor-velocity" class="stat-val" style="color: var(--text-flag);">— <span style="font-size:1rem;">Shannons/s</span></div>
+        </div>
+        <div id="blockade-alert" style="display:none; background:rgba(239,68,68,0.1); border:1px solid var(--text-block); border-radius:4px; padding:1rem; color:var(--text-block); font-size:0.8rem; font-weight:bold;">
+          🚨 CAPITAL OVERRIDE TRIGGERED: Cross-border liquidity limits breached. Administrative freeze commands broadcasted to the mesh routing layers.
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module" src="./dashboard/regulatory-core.js"></script>
+</body>
+</html>

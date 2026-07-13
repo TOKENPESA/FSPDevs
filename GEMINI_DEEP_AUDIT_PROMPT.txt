@@ -1,10 +1,16 @@
+﻿================================================================================
+FSPDevs — DEEP CODE AUDIT FOR GEMINI (v6.0 · Multi-Asset RWA · July 2026)
 ================================================================================
-TPXDevs — DEEP CODE AUDIT FOR GEMINI (v5.0 · Post-Refactor · June 2026)
-================================================================================
+
+STATUS LEARN (recommended before continuing development):
+  GEMINI_MILESTONE_STATUS.txt          ← CURRENT milestone (v10.0 App Store + Super Console)
+  FSPDevs-gemini-audit-14.zip        ← run bundle-gemini-audit-14.ps1
+  GEMINI_IMPLEMENTATION_STATUS.txt   ← phases 0–3 summary (v9.0)
+  FSPDevs-gemini-audit-13/AUDIT_SNAPSHOT_README.txt + FSPDevs-gemini-audit-13.zip
 
 UPLOAD TO GEMINI (2.5 Pro or Advanced with 1M context recommended):
   1. GEMINI_DEEP_AUDIT_PROMPT.txt   (this file — paste as your system/user prompt)
-  2. TPXDevs-code-audit-v5.zip      (source bundle — run bundle-gemini-audit.ps1)
+  2. FSPDevs-code-audit-v6.zip      (source bundle — run bundle-gemini-audit.ps1)
 
 OPTIONAL CONTEXT (upload if token budget allows):
   FIBER_ECOSYSTEM_BEST_IN_CLASS.txt   — benchmark targets + roadmap seed
@@ -18,11 +24,11 @@ YOUR ROLE
 You are a principal security engineer, distributed systems architect, and
 Nervos CKB / Fiber Network (FNN) infrastructure specialist.
 
-Perform an exhaustive, adversarial, production-readiness audit of TPXDevs —
+Perform an exhaustive, adversarial, production-readiness audit of FSPDevs —
 a 1024-node Fiber Agent mesh control plane with MFA supervisor, native
 sidecar fleet, dashboard, and local FNN JSON-RPC bridge.
 
-Your second mandate: benchmark TPXDevs against the Fiber Network ecosystem
+Your second mandate: benchmark FSPDevs against the Fiber Network ecosystem
 (fiber.world, nervosnetwork/fiber, community LN-style tooling) and produce a
 concrete roadmap to make this the BEST-IN-CLASS mesh operations + observability
 solution — not merely "testnet ready."
@@ -30,58 +36,81 @@ solution — not merely "testnet ready."
 Assume eventual deployment on Fiber testnet edge nodes, not only localhost.
 
 ================================================================================
-WHAT IS IN THE ZIP (v5 bundle)
+WHAT IS IN THE ZIP (v5.2 bundle — 69 workspace tests)
 ================================================================================
 
 WORKSPACE (Cargo workspace — root Cargo.toml):
   mesh-core/                       Shared crate (SOLID Phase 0)
     src/constants.rs               RING_SIZE, ports, defaults
-    src/types.rs                   MeshPulsePayload
-    src/topology.rs                ring/skip/chord, telemetry canonical msg
-    src/pubkey.rs                  agent_fnn_pubkey, secp256k1 dev keys
+    src/types.rs                   MeshPulsePayload, FiatProvider, EdgeTransaction,
+                                   FeeLayersConfig, FeeCalculationBreakdown,
+                                   FloatExhaustionTelemetry
+    src/topology.rs                ring/skip/chord, nonce-based canonical telemetry msg
+    src/pubkey.rs                  agent_fnn_pubkey, resolve_production_identity_key
     src/registry.rs                MeshPubkeyRegistry, merge_registry_json
     src/error.rs                   MeshError (thiserror)
-    9 unit tests
+    15 unit tests
 
   master-fiber-agent/              MFA supervisor (SOLID Phase 1 split)
-    src/main.rs                    ~125 lines bootstrap only
-    src/config.rs                  env, CORS, sim payments flag
+    src/main.rs                    bootstrap + liquidity copilot worker
+    src/config.rs                  env, mTLS (MFA_MTLS), Prometheus /metrics, 64KiB ingress,
+                                   MFA_TELCO_CLEARING_API_URL
+    src/clearing.rs                RegionalClearinghouseEngine (telco B2C + intent swap)
     src/types.rs                   route/payment/simulation DTOs
-    src/graph.rs                   CompleteMeshGraph, Dijkstra, 3 tests
-    src/state.rs                   AppState, HubConfig, registry load
-    src/hub.rs                     trigger_hub_liquidity_provisioning
-    src/payment.rs                 dispatch_route_payment, WS payment waiters
-    src/telemetry.rs               verify_telemetry_signature, 4 tests
-    src/auth.rs                    WS origin allowlist, 1 test
-    src/ui_events.rs               send_ui_event (logged broadcast failures)
+    src/graph.rs                   CompleteMeshGraph, gossip, multi-hop routing
+    src/state.rs                   AppState, HubConfig, multi_hub_registry
+    src/hub.rs                     multi-hub liquidity + intent swap lifecycle
+    src/payment.rs                 dispatch_route_payment, multi-hop engine
+    src/telemetry.rs               signature, timestamp skew, verify_telemetry_sequence (nonce)
+    src/auth.rs                    check_websocket_handshake_origin (strict CSWSH)
+    src/ui_events.rs               send_ui_event + broadcast_monitor_event
     src/handlers/
-      health.rs, route.rs, telemetry.rs, simulation.rs
-      ws_agent.rs, ws_monitor.rs
-    src/workers/background.rs        heal, isolate, hub funding, dedupe
-    8 unit tests (graph, telemetry, auth; pubkey/registry in mesh-core)
+      health.rs, route.rs, telemetry.rs, simulation.rs, clearing.rs
+      ws_agent.rs, ws_monitor.rs (+ gossip channel ingest)
+    src/workers/background.rs      heal, copilot, ExpiringLockManager funding locks
+    POST /clearing/float-crisis      FloatExhaustionTelemetry → clearinghouse engine
+    27 unit tests
 
   fiber-agent/                     Native sidecar (fiber_agent_sidecar)
     src/main.rs                    single-agent daemon entry
     src/bin/mesh_fleet.rs          1024-FA fleet binary (mesh-fleet)
-    src/lib.rs                     crate root, re-exports, 4 tests
-    src/daemon.rs                  SidecarConfig, telemetry poll, WS loop
-    src/identity.rs                env-aware signing keys
-    src/telemetry.rs               sign, queue, flush telemetry
+    src/lib.rs                     crate root, re-exports
+    src/daemon.rs                  SidecarConfig, telemetry poll, TelcoFloatFixedPoint (type only)
+    src/fees.rs                    FeeCalculationEngine (3-tier cash-out breakdown)
+    src/fiat_bridge.rs             MobileMoneyFloatBridge (cash-in, float crisis, fee invoice)
+    src/clearing_client.rs         POST float-crisis → MFA /clearing/float-crisis
+    src/identity.rs                FSP_AGENT_SECRET_KEY + dev key resolution
+    src/telemetry.rs               sign, queue, prepare_ordered_telemetry_flush
     src/payment.rs                 execute_mesh_payment (keysend)
     src/hot_swap.rs                execute_hot_swap
     src/mesh.rs                    mesh-core re-exports + sidecar helpers
-    src/mesh_ports.rs              per-agent FNN/MFA port math, 2 tests
-    src/fnn_client.rs                LiveFnnClient + SimulatedFnnClient, 8 tests
-    src/storage.rs                 SQLite cache, queue, ledger, 5 tests
-    19 unit tests total
+    src/mesh_ports.rs              per-agent FNN/MFA port math
+    src/fnn_client.rs              LiveFnnClient + SimulatedFnnClient
+    src/storage.rs                 open_performance_tuned_db (WAL + fiat_edge_ledger)
+    src-tauri/                     Tauri 2 desktop — Fiber Sidecar Operations Console
+      frontend/index.html          fee sliders, float sync, ledger stream
+      frontend/sidecar-console.js  Tauri invoke bridge + MFA clearing dispatch UI
+      src/commands.rs              cash-in, fee estimate, rebalance, hardware profile
+    26 unit tests (sidecar crate)
 
-DASHBOARD (SOLID Phase 3 — ES modules, no monolithic dashboard.js):
-  index.html                       loads ./dashboard/main.js
+  mesh-operator/                   Kubernetes fleet operator
+    src/crd.rs                     MeshFleet CRD (fspdevs.infra/v1alpha1)
+    src/controller.rs              reconcile loop, dual-container pod spec
+    src/main.rs                    kube Controller runtime
+    deploy/mesh-fleet-crd.yaml     CRD manifest for cluster install
+    1 unit test
+
+DASHBOARD (@fspdevs/fiber-dashboard npm package):
+  index.html                       loads ./dashboard/main.js + styles.css
+  package.json                     exports . / ./canvas / ./styles
   dashboard/
-    main.js, config.js, state.js, topology.js, format.js
+    main.js                        initFiberDashboard + library exports
+    config.js, state.js, topology.js, format.js, styles.css
     api/mfa.js
-    events/monitor.js, payment.js, liquidity.js
+    events/monitor.js              MonitorEnvelope + legacy MFA events
+    events/payment.js, liquidity.js
     canvas/layout.js, draw.js, tooltip.js
+    sidecar-console.js             Tauri sidecar fee/float console (shared with src-tauri)
 
 OPS SCRIPTS (included for deployment audit; no binaries/data):
   fnn-testnet/
@@ -90,7 +119,7 @@ OPS SCRIPTS (included for deployment audit; no binaries/data):
     mesh-pubkeys.example.json, mesh-pubkeys.live.example.json
     templates/node-config.yml.template
     config/testnet/config.yml, config/mainnet/config.yml
-  package.json                     serve:dashboard :8088, mesh:fleet scripts
+  package.json                     @fspdevs/fiber-dashboard + serve:dashboard :8088
 
 COMPANION DOCS IN ZIP:
   CODEBASE_MANIFEST.txt
@@ -103,7 +132,7 @@ EXPLICITLY EXCLUDED (do NOT expect in zip):
   fiber/                           upstream nervosnetwork/fiber submodule
   target/, Cargo.lock (optional), node_modules/, pkg/
   fnn-testnet/fnn.exe, fnn-cli.exe, fnn-testnet/data/ (RocksDB, keys)
-  TPXDevs-code-audit-v4/, gemini audit*/, Fiber Readiness/
+  FSPDevs-code-audit-v4/, gemini audit*/, Fiber Readiness/
   fiber-agent/wasm/, fiber-agent/demo/ (deprecated; removed from live tree)
 
 ================================================================================
@@ -151,7 +180,7 @@ v5.0 REFACTOR — VERIFY EACH (PASS / FAIL / PARTIAL)
   □ MeshError typed errors in mesh-core; release profile LTO in workspace
   □ Stale sim-peer-* pubkeys ignored; deterministic agent_fnn_pubkey dev keys
   □ Requity renamed to Liquidity in UI/API/docs
-  □ 36 workspace unit tests pass (9 mesh-core + 8 MFA + 19 sidecar)
+  □ 69 workspace unit tests pass (15 mesh-core + 27 MFA + 26 sidecar + 1 operator)
   □ cargo clippy clean on all three crates
   □ show-ckb-address Rust crate removed; get-ckb-address.ps1 is canonical
 
@@ -165,7 +194,12 @@ KNOWN LIMITATIONS (TEAM-ASSERTED — VALIDATE)
   • Dev secp256k1 keys in mesh-pubkeys — not production key management
   • MFA in-memory state — no crash recovery / cluster HA
   • Single-machine fleet — no K8s/service mesh deployment story yet
-  • Wasm browser agent deprecated; sidecar is primary path
+  • Mobile Money Float Bridge: Tauri + clearing_client wired; NOT in fiber-agent-daemon loop
+  • Float crisis → MFA POST /clearing/float-crisis wired from Tauri rebalance sim
+  • RegionalClearinghouseEngine: intent swap + telco B2C (needs MFA_TELCO_CLEARING_API_URL)
+  • Fee engine: 3-tier L1/L2/L3; hop count + FX rate still hardcoded mocks in fiat_bridge
+  • mTLS supervisor optional (MFA_MTLS=true + certs/); not default
+  • Prometheus /metrics exposed; custom business metrics minimal
 
 ================================================================================
 AUDIT QUESTIONS — ANSWER ALL
@@ -199,7 +233,7 @@ FNN / FIBER INTEGRATION
   19. Testnet readiness blockers for fiber.world participation?
 
 TESTING & OPS
-  20. 36 unit tests: quality, false confidence, top 10 missing integration tests?
+  20. 69 unit tests: quality, false confidence, top 10 missing integration tests?
   21. fnn-testnet scripts: idempotency, error handling, production gaps?
   22. Observability: metrics, tracing, structured logs — vs ecosystem norms?
 
@@ -207,7 +241,7 @@ TESTING & OPS
 FIBER ECOSYSTEM BENCHMARK — REQUIRED SECTION
 ================================================================================
 
-Compare TPXDevs to ecosystem reference points:
+Compare FSPDevs to ecosystem reference points:
   • Official FNN (nervosnetwork/fiber) — payment router, channel actor, RPC
   • fiber.world testnet requirements and public peer tooling
   • Lightning-style ops: routing, liquidity management, watchtowers (CKB analog)
@@ -224,7 +258,7 @@ Deliver:
      - Observability & ops
      - Developer experience (runbook, scripts, dashboard)
      - Testnet production readiness
-     - Ecosystem differentiation (what makes TPXDevs unique vs "just another FNN node")
+     - Ecosystem differentiation (what makes FSPDevs unique vs "just another FNN node")
 
   B) GAP ANALYSIS: top 15 gaps vs best-in-class Fiber mesh solution
 
@@ -233,7 +267,7 @@ Deliver:
      Phase B — Production hardening (TLS, auth, persistence, CI)
      Phase C — Ecosystem leadership (public API, plugin SDK, multi-hub)
 
-  D) KILLER FEATURES: 5 capabilities that would make TPXDevs the definitive
+  D) KILLER FEATURES: 5 capabilities that would make FSPDevs the definitive
      Fiber Network fleet + observability platform (be specific, cite files to extend)
 
   E) ANTI-PATTERNS: what NOT to build; where sim shortcuts must not leak to prod
@@ -259,7 +293,7 @@ REQUIRED OUTPUT FORMAT
 (Map to FIBER_TESTNET_READINESS_REVIEW.txt gates A/B/C — PASS/FAIL/PARTIAL)
 
 ## UNIT TEST REVIEW
-(Validate 36 tests; propose 10 integration/E2E tests with setup steps)
+(Validate 61 workspace tests; propose 10 integration/E2E tests with setup steps)
 
 ## FIBER ECOSYSTEM SCORECARD
 (Table from section above)
@@ -290,8 +324,11 @@ CONSTRAINTS
 REPRODUCTION (verify claims against zip)
 ================================================================================
 
-  cargo test --workspace
+  cargo test --workspace              # expect 61 passed (mesh-core 13, MFA 26, sidecar 21, operator 1)
   cargo clippy --workspace -- -D warnings
+
+  # Optional mTLS supervisor:
+  $env:MFA_MTLS = "true"   # requires certs/supervisor.crt, supervisor.key, ca.crt
 
   cd fnn-testnet
   .\start-live-mfa.ps1

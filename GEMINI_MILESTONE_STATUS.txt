@@ -1,0 +1,319 @@
+================================================================================
+FSPDevs — GEMINI MILESTONE STATUS (v10.0 · App Store + Super Console · July 2026)
+================================================================================
+
+USE THIS FILE TO CONTINUE DISCUSSION WITH GEMINI
+  Paste this entire file as your prompt (or attach the zip below).
+  Gemini should treat this as authoritative session context — not frozen audit-13.
+
+UPLOAD TO GEMINI (recommended)
+  1. GEMINI_MILESTONE_STATUS.txt          ← this file (paste as prompt)
+  2. FSPDevs-gemini-audit-14.zip          ← milestone source bundle
+
+REGENERATE BUNDLE
+  powershell -ExecutionPolicy Bypass -File bundle-gemini-audit-14.ps1
+
+PRIOR CONTEXT (optional — older phases 0–3 multi-asset RWA)
+  FSPDevs-gemini-audit-13.zip + FSPDevs-gemini-audit-13/AUDIT_SNAPSHOT_README.txt
+  GEMINI_IMPLEMENTATION_STATUS.txt
+
+FULL REPO (optional — large)
+  GEMINI_DEEP_AUDIT_PROMPT.txt + FSPDevs-code-audit-v6.zip
+  powershell -ExecutionPolicy Bypass -File bundle-gemini-audit.ps1
+
+LOCAL INTEGRITY GATE (verified 2026-07-12)
+  npm run integrity          → 0 failures (includes MFA cargo test + fsp-console build)
+  npm run typecheck          → 0 errors (strict JS)
+  cargo test (master-fiber-agent) → 54 passed
+
+================================================================================
+YOUR ROLE (for Gemini)
+================================================================================
+
+Principal Rust + distributed systems engineer, Fiber Network (FNN) specialist,
+and frontend security reviewer.
+
+**Primary mandate:** Deep-learn the milestone delivered in v10.0 (App Store
+hot-swap parity, MFA CORS/console fixes, integrity hardening, React Super App)
+and help the team plan the NEXT sprint without regressing completed work.
+
+**Secondary mandate:** Identify gaps between:
+  (A) Local dev stack (MFA :1025 + FA Tauri + consoles)
+  (B) Fiber testnet readiness
+  (C) Production plugin governance + observability
+
+Cite file paths from the attached audit-14 zip when making claims.
+Do NOT cite frozen TPXDevs-gemini-audit-* or FSPDevs-gemini-audit-10..13 as live
+source unless explicitly comparing historical deltas.
+
+================================================================================
+MILESTONE VERDICT (v10.0)
+================================================================================
+
+DONE — App Store / hot-swap module registry (FA + MFA parity)
+DONE — MFA browser console App Store (CORS + dedicated API client)
+DONE — Integrity gate expansion (typecheck, MFA tests, console build)
+DONE — MFA SQLite error sanitization (HTTP API safety)
+DONE — React fsp-console Super App shell (workspace mux + MFA wiring)
+PARTIAL — StandaloneMeshController (demo/mock OOB — not live Tauri yet)
+PARTIAL — Live FNN testnet E2E (Phase 4 from v9.0 — still not started)
+
+================================================================================
+ARCHITECTURE (current runtime stack)
+================================================================================
+
+Three-tier control plane (unchanged from v9.0):
+  [MFA master-fiber-agent :1025]  routing, clearing, compliance, plugin policies
+  [fiber-agent sidecar]           FNN adapter, SQLite modules, Tauri desktop
+  [mesh-core]                     shared types, topology, currency, compliance
+
+NEW UI surfaces (v10.0):
+  mfa-console/              Vanilla MFA ops console (:8088/mfa-console/)
+  fsp-console/              React Super App (Vite :5173) — treasury + retail profiles
+  fiber-agent/src-tauri/    FA desktop shell with synced dashboard + App Store
+
+Startup order (local dev):
+  1. MFA   → fnn-testnet/start-live-mfa.ps1  (sets MFA_DEV_MODE=true)
+  2. FA    → fiber-agent Tauri / sidecar
+  3. UI    → npm run console:dev  OR  npm run serve:mfa
+
+URLs:
+  MFA API              http://127.0.0.1:1025
+  Legacy MFA console   http://127.0.0.1:8088/mfa-console/
+  React Super App      http://127.0.0.1:5173  (Vite proxies /mfa-api → :1025)
+  FA sidecar API       http://127.0.0.1:19444
+
+================================================================================
+MILESTONE 1 — MFA APP STORE BACKEND
+================================================================================
+
+Problem solved:
+  MFA policy plugins could not be installed/uninstalled from browser UI.
+  Catalog showed "Loading…" / "Failed to fetch" (CORS).
+  Uninstalled plugins reappeared after restart (bootstrap re-seed bug).
+
+Implementation:
+  master-fiber-agent/src/mfa_storage.rs
+    - installed_modules + mfa_registry_meta tables
+    - plugin_registry_bootstrapped flag (persisted)
+    - hydrate does NOT re-seed after user uninstalls all modules
+
+  master-fiber-agent/src/policies/registry.rs (PluginHotReloader)
+    - hydrate_from_storage(), install_and_mount(), uninstall(), toggle()
+    - mark_plugin_registry_bootstrapped() on user install/uninstall
+
+  master-fiber-agent/src/api/plugin_routes.rs
+    GET  /api/modules/catalog
+    GET  /api/modules/installed
+    POST /api/modules/install
+    POST /api/modules/uninstall
+    PUT  /api/modules/toggle
+
+  master-fiber-agent/src/auth.rs + config.rs
+    - is_allowed_cors_origin() shares allowlist with WebSocket origins
+    - PUT added to CORS methods
+    - Origins: :8088 (legacy console), :5173 (React console), loopback variants
+    - MFA_DEV_MODE=true allows any loopback port in dev
+
+  master-fiber-agent/src/handlers/health.rs
+    - running_plugins in health JSON
+
+  master-fiber-agent/src/storage_error.rs (NEW)
+    - sanitize_storage_error() — raw rusqlite text never returned to HTTP clients
+
+  fnn-testnet/start-live-mfa.ps1
+    - Stop-ExistingMfa before bind (port 1025 conflict fix)
+    - MFA_DEV_MODE=true for local console dev
+
+================================================================================
+MILESTONE 2 — MFA APP STORE FRONTEND (vanilla mfa-console)
+================================================================================
+
+Pattern mirrors FA desktop App Store but uses HTTP (not Tauri IPC):
+
+  mfa-console/js/mfa-module-store-api.js
+    - getMfaModuleApi() → createModuleApiClient({ baseUrl, mfaAuthHeaders })
+
+  dashboard/dashboard-module-api.js
+    - Shared fetchWithTimeout module API client (catalog/install/toggle)
+
+  mfa-console/js/modules/app-store/
+    - Top-level nav App Store panel (not buried under Supervisor)
+
+  mfa-console/js/ui-host.js
+    - syncRunningModules(), App Store as topLevel module
+
+  mfa-console/js/mfa-runtime.js + dashboard-stats.js
+    - running_plugins metric, hero CTA, warning banner when MFA offline
+
+Root cause of "Failed to fetch":
+  Browser CORS blocked PUT/Origin from :8088/:5173 — fixed in MFA CORS layer.
+
+================================================================================
+MILESTONE 3 — FA APP STORE (reference — completed earlier, still active)
+================================================================================
+
+  fiber-agent/src/modules/registry.rs       DynamicModuleRegistry + HotReloader
+  fiber-agent/src-tauri/frontend/js/fa-module-store-api.js
+    - Tauri invoke() when __TAURI__ present, HTTP fallback to :19444
+  fiber-agent/src-tauri/frontend/js/modules/app-store/
+  Bootstrap flag in fiber-agent SQLite (same pattern as MFA)
+
+Sync pipeline:
+  npm run sync:sidecar-ui   → copies dashboard/* into Tauri frontend
+  dom.js path rewrite: ../packages → ./packages for frontend root
+
+================================================================================
+MILESTONE 4 — INTEGRITY GATE (repo-wide)
+================================================================================
+
+  scripts/integrity.mjs now checks:
+    - JSON parse (workspace package.json files)
+    - cargo check: mesh-core, fsp-fixed-math, fiber-agent, fiber-agent-desktop,
+                   master-fiber-agent
+    - cargo audit (workspace root)
+    - cargo test: master-fiber-agent (--test-threads=1, 54 tests)
+    - ES module import smoke (dashboard, mfa-console, FA frontend)
+    - MFA CSS sync (mfa-console/styles ↔ sidecar console.css)
+    - fsp-console vite build
+
+  scripts/sync-sidecar-ui.mjs — dom.js path fix for Tauri frontend root
+  dashboard/regulatory-core.js — fetchWithTimeout + mfaAuthHeaders
+
+Coding standards enforced (.cursor/rules/coding-standards.mdc):
+  fetch()        → fetchWithTimeout()
+  WebSocket      → connectWebSocketWithTimeout()
+  console.log    → createLogger()
+  Money          → parseAtomicInt / BigInt (no parseFloat for financial inputs)
+  Rust DB errors → sanitize_storage_error() before frontend/HTTP
+
+================================================================================
+MILESTONE 5 — React fsp-console (Super App)
+================================================================================
+
+Stack: Vite + React 18 + Tailwind + Lucide (NOT Next.js)
+
+Profile flag:
+  VITE_APP_PROFILE / NEXT_PUBLIC_APP_PROFILE
+    RETAIL_SIDECAR | TREASURY_HUB
+  npm run dev:retail | dev:treasury | console:dev
+
+Key components:
+  src/App.jsx                    → SuperAppConsole
+  src/components/superapp/
+    SuperAppConsole.jsx          workspace mux
+    AppDock.jsx                  mini-apps [01]–[05]
+    StandaloneMeshController.jsx "Works without MFA" sovereign mesh demo
+    OobFallbackPanel.jsx         QR placeholder + HTLC countdown (mock)
+  src/components/supervisor/MfaSupervisor.jsx
+  src/components/registry/ModuleRegistry.jsx   live hot-swap vs MFA :1025
+  src/api/mfa.js + fetch-timeout.js            MFA health + module API
+  vite.config — /mfa-api proxy → 127.0.0.1:1025
+
+Status labels (clarified):
+  SUPERVISOR OFFLINE = browser cannot reach MFA (not "mesh down")
+  MESH IDLE / MESH ONLINE = monitor WebSocket state
+
+NOT YET WIRED:
+  StandaloneMeshController → real Tauri oob-fallback.js APIs (still mock data)
+
+================================================================================
+PLUGIN / POLICY CATALOG (MFA — policy plugins)
+================================================================================
+
+| module_name          | Display name (UI)              | Kind   |
+|----------------------|--------------------------------|--------|
+| lume_pricing         | LumePricingEngine              | policy |
+| sovereign_compliance | SovereignComplianceFilter      | policy |
+| automated_refueling  | AutomatedRefuelingBrain        | policy |
+| clearinghouse_swap   | ClearinghouseSwapModule        | policy |
+
+FA native modules (sidecar — separate catalog):
+  dicoba, fiat_bridge, telco_b2c_sweep, lume_yielding,
+  securities_compliance, fiber_agent_swarm
+
+================================================================================
+AUTOMATED GATE SNAPSHOT (2026-07-12)
+================================================================================
+
+| Gate                              | Result | Notes |
+|-----------------------------------|--------|-------|
+| npm run integrity                 | PASS   | 0 failures |
+| npm run typecheck                 | PASS   | strict jsconfig |
+| cargo test (master-fiber-agent)   | PASS   | 54 tests, serial |
+| cargo check (all integrity crates)| PASS   | |
+| cargo audit                       | PASS   | |
+| fsp-console vite build            | PASS   | in integrity.mjs |
+
+Test fixes in v10.0:
+  auth::test_ws_origin_allowlist — env restore after assertion (MFA_DEV_MODE flake)
+  test_support::block_on_test_async — nested Tokio runtime in #[tokio::test]
+
+================================================================================
+KNOWN LIMITATIONS (team-asserted — validate in zip)
+================================================================================
+
+  • fsp-console StandaloneMeshController uses mock peer/OOB data
+  • fsp-console not in jsconfig — covered by Vite build only
+  • sidecar-console.js demo sliders still use parseFloat (non-API UI only)
+  • Phase 4 live FNN testnet E2E still not started (from v9.0)
+  • LUME order book in-memory; ZK compliance structural stub
+  • MFA graph dev-seeded — full live gossip fleet sync partial
+  • Frozen audit snapshot folders (gemini-audit-10..13) are STALE
+
+================================================================================
+RECOMMENDED NEXT SPRINT (for Gemini to refine with team)
+================================================================================
+
+Priority 1 — Wire React OOB panel to FA Tauri IPC (oob-fallback.js parity)
+Priority 2 — fiber-agent cargo test in integrity.mjs (mirror MFA)
+Priority 3 — Live FNN channel + send_payment E2E (Phase 4 kickoff)
+Priority 4 — Plugin config validation UI (schema per module in App Store)
+Priority 5 — MFA monitor WebSocket in fsp-console (today: health polling only)
+
+================================================================================
+REQUIRED OUTPUT FORMAT (when Gemini reviews this milestone)
+================================================================================
+
+### 1. Milestone comprehension
+Summarize v10.0 deliverables in your own words (App Store, CORS, integrity, React).
+
+### 2. Regression risks
+| Area | Risk | Evidence (file) | Mitigation |
+
+### 3. Security findings
+| ID | Severity | File | Finding | Fix |
+(minimum 10 from audit-14 zip only)
+
+### 4. FA ↔ MFA parity gaps
+What App Store behaviors differ between Tauri FA and HTTP MFA?
+
+### 5. fsp-console integration gaps
+What is mock vs live? What to wire next?
+
+### 6. Recommended task sequence (next 2 weeks)
+Ranked S/M/L with dependencies.
+
+### 7. Go / no-go
+Safe to proceed with Phase 4 testnet work? YES / YES WITH CAVEATS / NO
+
+================================================================================
+VERIFY LOCALLY
+================================================================================
+
+  npm run integrity
+  npm run typecheck
+
+  # MFA
+  cd fnn-testnet; .\start-live-mfa.ps1
+  npm run serve:mfa
+  # Open http://127.0.0.1:8088/mfa-console/ → App Store → install lume_pricing
+
+  # React console
+  npm run console:dev
+  # Open http://127.0.0.1:5173 → Module Registry hot-swap
+
+  # FA desktop (after MFA up)
+  cd fiber-agent; npm run tauri:run:44
+
+================================================================================

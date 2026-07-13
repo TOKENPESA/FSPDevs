@@ -1,107 +1,80 @@
-TPXDevs — File Manifest (v5.0 · Post-Refactor · June 2026)
-===========================================================
+﻿FSPDevs — File Manifest (v9.0 · Multi-Asset RWA + RGB++ · July 2026)
+======================================================================
 
 CANONICAL DOCS:
-  SIMULATION_BASE.txt                  Runbook + architecture (update for v5)
+  GEMINI_IMPLEMENTATION_STATUS.txt   Quick status + upload instructions (START HERE)
+  FSPDevs-gemini-audit-13/           Focused 35-file Gemini deep-learn snapshot
+  GEMINI_DEEP_AUDIT_PROMPT.txt         Full-repo adversarial audit prompt (v5.2)
+  SIMULATION_BASE.txt                  Runbook + architecture
   FIBER_TESTNET_READINESS_REVIEW.txt   Testnet gate scorecard
   FIBER_ECOSYSTEM_BEST_IN_CLASS.txt    Ecosystem benchmark + roadmap seed
-  GEMINI_DEEP_AUDIT_PROMPT.txt         Gemini audit prompt (primary)
-  GEMINI_CODE_AUDIT_v4.txt             Legacy prompt (reference only)
   CODEBASE_MANIFEST.txt                This file
   ARCHIVE_SNAPSHOTS.txt                Frozen audit folders (not live source)
-  bundle-gemini-audit.ps1              Generates TPXDevs-code-audit-v5.zip
+
+BUNDLE SCRIPTS:
+  bundle-gemini-audit-13.ps1           → FSPDevs-gemini-audit-13.zip (status learn)
+  bundle-gemini-audit.ps1              → FSPDevs-code-audit-v6.zip (full repo)
+
+INTEGRITY GATES (2026-07-11):
+  npm run integrity                    PASS
+  npm run typecheck                    PASS (0 errors)
+  cargo test --workspace               136 passed
+  cargo clippy -D warnings             PASS
 
 WORKSPACE (root Cargo.toml):
-  mesh-core/           Shared topology, pubkeys, registry, errors
-  master-fiber-agent/  MFA supervisor (Axum :1025)
-  fiber-agent/         Native sidecar + mesh-fleet binary
+  mesh-core/           Shared types, topology, network, currency, compliance
+  master-fiber-agent/  MFA supervisor (Axum :1025) + multi-asset routing/clearing
+  fiber-agent/         Native sidecar + 6 SidecarModule plugins + Tauri shell
+  mesh-operator/       Kubernetes MeshFleet CRD + reconciler
+  fsp-fixed-math/      Fixed-point money math (TelcoFloatFixedPoint)
 
-mesh-core/ (9 tests)
-  src/lib.rs, constants.rs, types.rs, topology.rs
-  src/pubkey.rs, registry.rs, error.rs
+mesh-core/ (34 tests)
+  src/types.rs         L2Asset (CKB, RUSD, RGB++, UDT/xUDT), AssetCapacity,
+                       EdgeTransaction.capacities, MeshPulsePayload.asset_capacities
+  src/network.rs       PeerModulePacket, DidCommEnvelope, OOB URI
+  src/currency.rs      AssetRegistryHub
+  src/compliance.rs    IntentSwapOrder, audit envelopes
+  src/dicoba_logic.rs  Weekly contributions, vault logic
+  src/papss_types.rs   PAPSS settlement types
   Cargo.toml
 
-master-fiber-agent/ (8 tests)
-  src/main.rs          Bootstrap (~125 lines)
-  src/config.rs        Env, CORS, sim payments
-  src/types.rs         DTOs
-  src/graph.rs         CompleteMeshGraph, Dijkstra
-  src/state.rs         AppState, HubConfig
-  src/hub.rs           Hub liquidity provisioning
-  src/payment.rs       Route payment dispatch
-  src/telemetry.rs     Signature verification
-  src/auth.rs          WS origin allowlist
-  src/ui_events.rs     UI broadcast with logging
-  src/handlers/        health, route, telemetry, simulation, ws_agent, ws_monitor
-  src/workers/         background.rs (heal, funding, dedupe)
+master-fiber-agent/ (48 tests)
+  src/graph.rs         CompleteMeshGraph — HashMap<L2Asset,u64> per edge
+  src/routing.rs       Asset-aware Dijkstra (NEW Phase 3)
+  src/clearing.rs      RegionalClearinghouseEngine + MultiAssetCrossClearingIntent
+  src/handlers/        route (target_asset), clearing/multi-asset, telemetry, ws_*
+  src/workers/         background.rs — multi-asset heartbeat + settlement pulses
+  src/hub.rs           Multi-hub intent swaps
+  src/payment.rs       Route + multi-hop payment dispatch
+  POST /route, /clearing/float-crisis, /clearing/multi-asset, /clearing/b2b-remittance
   Cargo.toml
 
-fiber-agent/ (19 tests) — crate: fiber_agent_sidecar
-  src/main.rs          fiber-agent-daemon binary
-  src/bin/mesh_fleet.rs mesh-fleet binary (1024 FA fleet)
-  src/lib.rs           Crate root
-  src/daemon.rs        Sidecar loop, telemetry poll
-  src/identity.rs      Signing key resolution
-  src/telemetry.rs     Sign, queue, flush
-  src/payment.rs       MESH_SEND_PAYMENT / keysend
-  src/hot_swap.rs      Channel hot-swap executor
-  src/mesh.rs          mesh-core re-exports
-  src/mesh_ports.rs    Per-agent port allocation
-  src/fnn_client.rs    Live + Simulated FNN RPC
-  src/storage.rs       SQLite persistence
-  Cargo.toml, package.json
+fiber-agent/ (50 tests) — crate: fiber_agent_sidecar
+  src/fnn_client.rs    RGB++ RPC: get_rgb_cell_capacity, map_bitcoin_utxo
+  src/modules/
+    dicoba_module.rs, fiat_bridge_module.rs, telco_sweep.rs
+    lume_yielding.rs, securities_compliance.rs, fiber_agent_swarm.rs
+  src/module_*.rs      registry, catalog, profile, host, system
+  src/storage.rs       asset_capacities_json column + fiat_edge_ledger
+  profiles/full.profile.toml  All 6 modules enabled
+  src-tauri/           Tauri 2 Fiber Sidecar Operations Console
+  Cargo.toml
 
-dashboard/ (12 ES modules)
-  main.js, config.js, state.js, topology.js, format.js
-  api/mfa.js
-  events/monitor.js, payment.js, liquidity.js
-  canvas/layout.js, draw.js, tooltip.js
-  index.html           Loads ./dashboard/main.js
-  package.json         serve:dashboard :8088
+UI:
+  mfa-console/         MFA Operations Console (:8088) — mesh, routing, compliance panels
+  dashboard/           Legacy canvas + shared money/logger/fetch-timeout helpers
+  packages/fsp-ui-types/  Shared DOM + error helpers for strict JS
 
-fnn-testnet/ (scripts + config in audit zip; binaries/data excluded)
-  spawn-mesh-fleet.ps1, stop-mesh-fleet.ps1
-  start-live-mfa.ps1, start-dashboard.ps1
-  spawn-live-fnn-nodes.ps1, get-ckb-address.ps1
-  mesh-pubkeys.example.json, mesh-pubkeys.live.example.json
-  templates/node-config.yml.template
-  config/testnet/config.yml, config/mainnet/config.yml
+OPS:
+  scripts/integrity.mjs   Automated integrity gate
+  fnn-testnet/            MFA/FNN spawn scripts
 
-EXCLUDED FROM AUDIT ZIP:
-  fiber/               Upstream submodule
-  target/, node_modules/, pkg/
-  fnn-testnet/fnn.exe, fnn-cli.exe, fnn-testnet/data/
-  TPXDevs-code-audit-v4/, gemini audit*/, Fiber Readiness/
-  fiber-agent/wasm/, fiber-agent/demo/
+FROZEN SNAPSHOTS (DO NOT USE AS LIVE SOURCE):
+  TPXDevs-gemini-audit-*, FSPDevs-gemini-audit-10/11/12, TPXDevs-code-audit-v5
 
-ARCHITECTURE:
-
-  [Dashboard :8088]  ES modules
-         |
-         |  WS monitor, HTTP route/simulation
-         v
-  [MFA :1025]  master-fiber-agent + mesh-core
-         |
-         |  WS per agent (hot-swap, payments)
-         v
-  [Sidecar fleet]  fiber-agent mesh-fleet / daemon
-         |
-         |  JSON-RPC
-         v
-  [FNN]  fnn-testnet (local)
-
-KEY PORTS:
-  1025   MFA HTTP/WS
-  8088   Dashboard
-  8227+  FNN RPC (per-agent via mesh_ports when fleet live)
-
-TESTS: 36 total (9 mesh-core + 8 MFA + 19 sidecar)
-VERIFY: cargo test --workspace && cargo clippy --workspace -- -D warnings
-
-START ORDER:
-  1. fnn-testnet\start-live-mfa.ps1
-  2. npm run serve:dashboard
-  3. fnn-testnet\spawn-mesh-fleet.ps1 -To N
-
-AUDIT BUNDLE:
-  .\bundle-gemini-audit.ps1  →  TPXDevs-code-audit-v5.zip
+IMPLEMENTATION PHASES:
+  Phase 0  SOLID refactor                    COMPLETE
+  Phase 1  Multi-asset HTLC + RGB++ RPC      COMPLETE
+  Phase 2  Sidecar modules (LUME, compliance, AMM)  COMPLETE
+  Phase 3  MFA multi-asset routing + clearing COMPLETE
+  Phase 4  Live testnet + production keys    NOT STARTED

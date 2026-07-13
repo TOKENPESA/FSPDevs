@@ -1,0 +1,27 @@
+# Default development profile — all modules enabled.
+[sidecar]
+profile = "full"
+
+[modules.dicoba]
+enabled = true
+
+[modules.fiat_bridge]
+enabled = true
+provider = "mpesa"
+msisdn = "255700000000"
+critical_fiat_floor = 50000.0
+
+[modules.telco_b2c_sweep]
+enabled = true
+
+[modules.lume_yielding]
+enabled = true
+
+[modules.securities_compliance]
+enabled = true
+
+[modules.fiber_agent_swarm]
+enabled = true
+
+[network]
+mfa_host = "127.0.0.1:1025"

@@ -17,32 +17,34 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 
 /// Time-bounded per-agent locks to prevent duplicate hub funding RPCs.
-pub struct FundingLockManager {
-    locks: HashMap<u16, Instant>,
-    lock_timeout: Duration,
+pub struct ExpiringLockManager {
+    funding_locks: HashMap<u16, Instant>,
+    eviction_window: Duration,
 }
 
-impl FundingLockManager {
-    pub fn new(timeout_seconds: u64) -> Self {
+impl ExpiringLockManager {
+    pub fn new(timeout_secs: u64) -> Self {
         Self {
-            locks: HashMap::new(),
-            lock_timeout: Duration::from_secs(timeout_seconds),
+            funding_locks: HashMap::new(),
+            eviction_window: Duration::from_secs(timeout_secs),
         }
     }
 
-    pub fn acquire_lock(&mut self, agent_id: u16) -> bool {
+    pub fn try_acquire_lock(&mut self, agent_id: u16) -> bool {
         let now = Instant::now();
-        if let Some(acquired_at) = self.locks.get(&agent_id) {
-            if now.duration_since(*acquired_at) < self.lock_timeout {
+
+        if let Some(&lock_time) = self.funding_locks.get(&agent_id) {
+            if now.duration_since(lock_time) < self.eviction_window {
                 return false;
             }
         }
-        self.locks.insert(agent_id, now);
+
+        self.funding_locks.insert(agent_id, now);
         true
     }
 
     pub fn release_lock(&mut self, agent_id: u16) {
-        self.locks.remove(&agent_id);
+        self.funding_locks.remove(&agent_id);
     }
 }
 
@@ -69,6 +71,12 @@ pub struct LiquidityCopilot {
     low_watermark_shannons: u64,
     depletion_horizon_secs: f64,
     cooldown: Duration,
+}
+
+impl Default for LiquidityCopilot {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LiquidityCopilot {
@@ -156,7 +164,7 @@ async fn maybe_trigger_preemptive_liquidity(
     prediction: LiquidityPrediction,
 ) {
     let mut locks = state.active_funding_locks.write().await;
-    if !locks.acquire_lock(agent_id) {
+    if !locks.try_acquire_lock(agent_id) {
         return;
     }
     drop(locks);
@@ -258,26 +266,55 @@ pub async fn background_processor_worker(
     let mut heartbeat_log_counter: u64 = 0;
 
     while let Some(telemetry) = rx.recv().await {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("mesh_topology_journal.wal")
+        {
+            use std::io::Write;
+            if let Ok(serialized) = serde_json::to_string(&telemetry) {
+                let _ = writeln!(file, "{serialized}");
+            }
+        }
+
+        let minimum_required = state.hub_config.funding_allocation_shannons;
+        if let Some(packet) = crate::telemetry_packet_from_mesh_pulse(&telemetry, minimum_required) {
+            crate::process_inbound_telemetry(
+                packet,
+                state.enterprise_clearinghouse.clone(),
+            )
+            .await;
+        }
+
         let edge_limit = state.simulation_edge_nodes.load(Ordering::Relaxed);
         match telemetry.status.as_str() {
             "MESH_HEARTBEAT" => {
-                if telemetry.agent > edge_limit {
+                if telemetry.agent_id > edge_limit {
                     continue;
                 }
 
                 {
                     let mut graph_write = graph.write().await;
                     graph_write.apply_heartbeat_liveness(
-                        telemetry.agent,
+                        telemetry.agent_id,
                         &telemetry.active_mesh_neighbors,
                     );
-                    if let Some(outbound) = telemetry.outbound_shannons {
-                        graph_write.apply_heartbeat_liquidity(telemetry.agent, outbound);
+                    if telemetry.local_capacity_shannons > 0 {
+                        graph_write.apply_heartbeat_liquidity(
+                            telemetry.agent_id,
+                            telemetry.local_capacity_shannons,
+                        );
                         state
                             .agent_liquidity_snap
                             .write()
                             .await
-                            .insert(telemetry.agent, outbound);
+                            .insert(telemetry.agent_id, telemetry.local_capacity_shannons);
+                    }
+                    if !telemetry.asset_capacities.is_empty() {
+                        graph_write.apply_heartbeat_multi_asset_liquidity(
+                            telemetry.agent_id,
+                            &telemetry.asset_capacities,
+                        );
                     }
                 }
 
@@ -286,7 +323,27 @@ pub async fn background_processor_worker(
                         .agent_fnn_pubkeys
                         .write()
                         .await
-                        .insert(telemetry.agent, pk.clone());
+                        .insert(telemetry.agent_id, pk.clone());
+                }
+
+                let heartbeat_payload = match serde_json::to_value(&telemetry) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log::warn!(
+                            "⚠️ [MFA TELEMETRY] FA-{} heartbeat JSON encode failed: {err}",
+                            telemetry.agent_id
+                        );
+                        serde_json::Value::Null
+                    }
+                };
+                if !heartbeat_payload.is_null() {
+                    state
+                        .plugin_registry
+                        .dispatch_heartbeat(
+                            &format!("FA-{}", telemetry.agent_id),
+                            &heartbeat_payload,
+                        )
+                        .await;
                 }
 
                 let agent_count = peers.read().await.len();
@@ -296,11 +353,10 @@ pub async fn background_processor_worker(
                     last_heartbeat_ui = Instant::now();
                     let ui_event = serde_json::json!({
                         "event": "MESH_HEARTBEAT",
-                        "node": telemetry.agent,
+                        "node": telemetry.agent_id,
                         "channels": telemetry.active_mesh_neighbors.len(),
                         "neighbors": telemetry.active_mesh_neighbors,
-                        "outbound_shannons": telemetry.outbound_shannons,
-                        "inbound_shannons": telemetry.inbound_shannons,
+                        "local_capacity_shannons": telemetry.local_capacity_shannons,
                     });
                     send_ui_event(&ui_broadcast, ui_event.to_string());
                 }
@@ -309,17 +365,33 @@ pub async fn background_processor_worker(
                 if agent_count <= 32 || heartbeat_log_counter.is_multiple_of(256) {
                     println!(
                         "💚 [MFA TELEMETRY] FA-{} heartbeat · {} channel(s) · {} agent WS(s) connected",
-                        telemetry.agent,
+                        telemetry.agent_id,
                         telemetry.active_mesh_neighbors.len(),
                         agent_count
                     );
                 }
             }
-            "ALERT_MFA_NODE_DROPPED" => {
-                if telemetry.agent > edge_limit || telemetry.report_target > edge_limit {
+            "MESH_ASSET_SETTLEMENT" => {
+                if telemetry.agent_id > edge_limit {
                     continue;
                 }
-                let dedupe_key = (telemetry.agent, telemetry.report_target);
+                let mut graph_write = graph.write().await;
+                for cap in &telemetry.asset_capacities {
+                    for &peer_id in &telemetry.active_mesh_neighbors {
+                        graph_write.apply_settlement_asset_pulse(
+                            telemetry.agent_id,
+                            peer_id,
+                            cap.asset.clone(),
+                            cap.amount_atomic,
+                        );
+                    }
+                }
+            }
+            "ALERT_MFA_NODE_DROPPED" => {
+                if telemetry.agent_id > edge_limit || telemetry.report_target > edge_limit {
+                    continue;
+                }
+                let dedupe_key = (telemetry.agent_id, telemetry.report_target);
                 if !record_alert_dedupe(&state, dedupe_key).await {
                     continue;
                 }
@@ -327,17 +399,17 @@ pub async fn background_processor_worker(
                 let fallback_target = {
                     let mut graph_write = graph.write().await;
                     graph_write.isolate_faulty_node(telemetry.report_target);
-                    graph_write.pick_healing_peer(telemetry.agent, telemetry.report_target)
+                    graph_write.pick_healing_peer(telemetry.agent_id, telemetry.report_target)
                 };
 
                 println!(
                     "🧠 [MFA MESH BRAIN] Isolated FA-{}. Healing FA-{} → FA-{}",
-                    telemetry.report_target, telemetry.agent, fallback_target
+                    telemetry.report_target, telemetry.agent_id, fallback_target
                 );
 
                 {
                     let registry = peers.read().await;
-                    if let Some((agent_tx, _)) = registry.get(&telemetry.agent) {
+                    if let Some((agent_tx, _)) = registry.get(&telemetry.agent_id) {
                         let swap_cmd = serde_json::json!({
                             "command": "MESH_CHANNEL_HOT_SWAP",
                             "target_peer_id": telemetry.report_target,
@@ -349,20 +421,20 @@ pub async fn background_processor_worker(
                         {
                             eprintln!(
                                 "❌ [HEALING FAILURE] Failed to route instruction to Node FA-{}.",
-                                telemetry.agent
+                                telemetry.agent_id
                             );
                         }
                     } else {
                         eprintln!(
                             "⚠️ [HEALING VOID] No active WebSocket for FA-{} — dashboard notified, hot-swap not delivered.",
-                            telemetry.agent
+                            telemetry.agent_id
                         );
                     }
                 }
 
                 let ui_event = serde_json::json!({
                     "event": "MESH_HEAL",
-                    "node": telemetry.agent,
+                    "node": telemetry.agent_id,
                     "removed": telemetry.report_target,
                     "added": fallback_target,
                 });
@@ -381,25 +453,25 @@ mod tests {
 
     #[test]
     fn funding_lock_blocks_duplicate_acquire_within_timeout() {
-        let mut mgr = FundingLockManager::new(60);
-        assert!(mgr.acquire_lock(44));
-        assert!(!mgr.acquire_lock(44));
+        let mut mgr = ExpiringLockManager::new(60);
+        assert!(mgr.try_acquire_lock(44));
+        assert!(!mgr.try_acquire_lock(44));
     }
 
     #[test]
     fn funding_lock_releases_explicitly() {
-        let mut mgr = FundingLockManager::new(60);
-        assert!(mgr.acquire_lock(7));
+        let mut mgr = ExpiringLockManager::new(60);
+        assert!(mgr.try_acquire_lock(7));
         mgr.release_lock(7);
-        assert!(mgr.acquire_lock(7));
+        assert!(mgr.try_acquire_lock(7));
     }
 
     #[test]
     fn funding_lock_expires_after_timeout() {
-        let mut mgr = FundingLockManager::new(1);
-        assert!(mgr.acquire_lock(99));
+        let mut mgr = ExpiringLockManager::new(1);
+        assert!(mgr.try_acquire_lock(99));
         thread::sleep(StdDuration::from_millis(1100));
-        assert!(mgr.acquire_lock(99));
+        assert!(mgr.try_acquire_lock(99));
     }
 
     #[test]

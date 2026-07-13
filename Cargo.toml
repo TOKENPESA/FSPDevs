@@ -5,6 +5,7 @@ members = [
     "master-fiber-agent",
     "fiber-agent",
     "mesh-operator",
+    "fsp-fixed-math",
 ]
 
 [profile.release]

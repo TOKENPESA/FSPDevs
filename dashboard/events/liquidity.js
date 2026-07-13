@@ -11,16 +11,17 @@ const metricLiquidityFlight = document.getElementById("metric-liquidity-flight")
 const metricLiquidityFail = document.getElementById("metric-liquidity-fail");
 
 export function updateHubPanel() {
-  hubRpcEl.textContent = state.hub.rpcUrl;
-  hubFundingEl.textContent = state.hub.fundingShannons;
-  hubAlertsEl.textContent = state.hub.sidecarAlerts;
-  hubLastEventEl.textContent = state.liquidity.lastEvent;
-  metricLiquidityOk.textContent = String(state.liquidity.injections);
-  metricLiquidityFaucet.textContent = String(state.liquidity.faucetHints);
-  metricLiquidityFlight.textContent = String(state.liquidity.inFlight);
-  metricLiquidityFail.textContent = String(state.liquidity.failed);
+  if (hubRpcEl) hubRpcEl.textContent = state.hub.rpcUrl;
+  if (hubFundingEl) hubFundingEl.textContent = state.hub.fundingShannons;
+  if (hubAlertsEl) hubAlertsEl.textContent = state.hub.sidecarAlerts;
+  if (hubLastEventEl) hubLastEventEl.textContent = state.liquidity.lastEvent;
+  if (metricLiquidityOk) metricLiquidityOk.textContent = String(state.liquidity.injections);
+  if (metricLiquidityFaucet) metricLiquidityFaucet.textContent = String(state.liquidity.faucetHints);
+  if (metricLiquidityFlight) metricLiquidityFlight.textContent = String(state.liquidity.inFlight);
+  if (metricLiquidityFail) metricLiquidityFail.textContent = String(state.liquidity.failed);
 }
 
+/** @param {number} node @param {string} status */
 export function markLiquidityNode(node, status) {
   if (!node) return;
   state.liquidity.byNode.set(node, { status, at: Date.now() });
@@ -30,8 +31,9 @@ export function markLiquidityNode(node, status) {
   }
 }
 
+/** @param {Record<string, unknown>} payload @returns {boolean} */
 export function handleLiquidityEvent(payload) {
-  const node = payload.node;
+  const node = Number(payload.node);
   const ts = new Date().toLocaleTimeString();
 
   switch (payload.event) {

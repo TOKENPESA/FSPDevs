@@ -1,9 +1,9 @@
-================================================================================
-TPXDevs — FIBER NETWORK TESTNET READINESS REVIEW
+﻿================================================================================
+FSPDevs — FIBER NETWORK TESTNET READINESS REVIEW
 For Gemini Deep Analysis · v4.3 · June 2026
 ================================================================================
 
-Upload bundle: TPXDevs-code-audit-v4.zip (regenerate after pull)
+Upload bundle: FSPDevs-code-audit-v4.zip (regenerate after pull)
 Companion docs: SIMULATION_BASE.txt, CODEBASE_MANIFEST.txt
 
 YOUR ROLE:
@@ -13,14 +13,14 @@ You are a Principal Blockchain Infrastructure Architect specializing in:
 - Production security & testnet deployment gates
 
 Produce an honest status assessment, gap analysis, and a benchmark scorecard
-with PASS/FAIL/PARTIAL for each gate required before TPXDevs can integrate
+with PASS/FAIL/PARTIAL for each gate required before FSPDevs can integrate
 with the official Fiber Network Testnet (https://www.fiber.world).
 
 ================================================================================
 EXECUTIVE SUMMARY (TEAM SELF-ASSESSMENT — v4.3)
 ================================================================================
 
-Project:     TPXDevs / FiberAgent Mesh Simulation + Sidecar Bridge
+Project:     FSPDevs / FiberAgent Mesh Simulation + Sidecar Bridge
 Phase:       Phase 3 PARTIAL (FNN local) · Phase 4 IN PROGRESS (hub funding)
 Readiness:   ~45% toward Fiber Testnet integration (was ~40% in v4.2)
 Type:        Control-plane prototype WITH local FNN node — NOT testnet-peered
@@ -189,7 +189,7 @@ IMMEDIATE NEXT 10 ACTIONS
  6. [HIGH]     Integration test: heartbeat → MFA → dashboard WS
  7. [MEDIUM]   Sign MESH_HEARTBEAT payloads
  8. [MEDIUM]   Persist MFA graph (SQLite)
- 9. [MEDIUM]   Regenerate TPXDevs-code-audit-v4.zip with sidecar files
+ 9. [MEDIUM]   Regenerate FSPDevs-code-audit-v4.zip with sidecar files
 10. [LOW]      Docker-compose: MFA + FNN + dashboard + sidecar
 
 ================================================================================

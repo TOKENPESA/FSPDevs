@@ -1,9 +1,11 @@
+use crate::auth::verify_telemetry_agent_binding;
 use crate::ui_events::send_ui_event;
 use crate::graph::FnnChannelUpdate;
 use crate::hub::{trigger_hub_liquidity_provisioning, DEFAULT_HUB_ASSET};
 use crate::state::AppState;
 use crate::telemetry::{
-    validate_telemetry, verify_telemetry_signature, verify_telemetry_timestamp,
+    validate_telemetry, verify_telemetry_sequence, verify_telemetry_signature,
+    verify_telemetry_timestamp,
 };
 use crate::types::MeshPulsePayload;
 use axum::{
@@ -22,7 +24,7 @@ pub async fn ingest_telemetry_handler(
     if let Err(skew_error) = verify_telemetry_timestamp(&payload) {
         eprintln!(
             "⚠️ [STALE TELEMETRY] Blocked update from Node FA-{}: {}",
-            payload.agent, skew_error
+            payload.agent_id, skew_error
         );
         return (
             StatusCode::BAD_REQUEST,
@@ -37,13 +39,56 @@ pub async fn ingest_telemetry_handler(
     if let Err(auth_error) = verify_telemetry_signature(&payload) {
         eprintln!(
             "⚠️ [UNAUTHORIZED TELEMETRY] Blocked update from Node FA-{}: {}",
-            payload.agent, auth_error
+            payload.agent_id, auth_error
         );
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
                 "status": "UNAUTHORIZED_TELEMETRY",
                 "reason": auth_error,
+            })),
+        )
+            .into_response();
+    }
+
+    if let Some(pubkey) = payload.public_key_hex.as_deref() {
+        if let Err(binding_error) =
+            verify_telemetry_agent_binding(payload.agent_id, pubkey, &state.mesh_pubkey_registry)
+        {
+            eprintln!(
+                "⚠️ [UNAUTHORIZED TELEMETRY] Agent binding failed for FA-{}: {}",
+                payload.agent_id, binding_error
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "status": "UNAUTHORIZED_TELEMETRY",
+                    "reason": binding_error,
+                })),
+            )
+                .into_response();
+        }
+    } else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "status": "UNAUTHORIZED_TELEMETRY",
+                "reason": "public_key_hex required",
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(replay_error) = verify_telemetry_sequence(&payload) {
+        eprintln!(
+            "⚠️ [REPLAY TELEMETRY] Blocked update from Node FA-{}: {}",
+            payload.agent_id, replay_error
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "status": "REPLAY_TELEMETRY",
+                "reason": replay_error.to_string(),
             })),
         )
             .into_response();
@@ -58,7 +103,7 @@ pub async fn ingest_telemetry_handler(
     }
 
     if payload.status == "ALERT_BALANCE_DEPLETED" {
-        let agent_id = payload.agent;
+        let agent_id = payload.agent_id;
 
         let target_pubkey = match payload.fnn_pubkey_hex.clone() {
             Some(key) if is_live_fiber_pubkey(&key) => key,
@@ -75,7 +120,7 @@ pub async fn ingest_telemetry_handler(
         };
 
         let mut locks = state.active_funding_locks.write().await;
-        if !locks.acquire_lock(agent_id) {
+        if !locks.try_acquire_lock(agent_id) {
             println!(
                 "⏳ [HUB LIQUIDITY] Ignored duplicate depletion alert from FA-{agent_id}. Funding transaction already in flight."
             );
@@ -119,7 +164,7 @@ pub async fn ingest_telemetry_handler(
     if payload.status == "ALERT_MFA_NODE_DROPPED" {
         println!(
             "🔧 [HEALING ENGINES] Authenticated fault alert from FA-{}",
-            payload.agent
+            payload.agent_id
         );
     }
 

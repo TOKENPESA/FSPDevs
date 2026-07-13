@@ -5,17 +5,19 @@ import {
   PAYMENT_SETTLE_DISPLAY_MS,
 } from "../config.js";
 import { formatShannons } from "../format.js";
+import { $ } from "../dom.js";
 import {
   resolveNodeBalances,
   state,
+  isCommLive,
 } from "../state.js";
 import { gridDim, meshPeerLinks } from "../topology.js";
-import { isCommLive } from "../state.js";
 
-const faTooltip = document.getElementById("fa-tooltip");
+const faTooltip = $("fa-tooltip");
 const canvas = document.getElementById("grid");
-const canvasWrap = canvas.closest(".canvas-wrap");
+const canvasWrap = canvas?.closest(".canvas-wrap") ?? null;
 
+/** @param {number} id @returns {{ label: string, cls: string }} */
 export function nodeStatus(id) {
   if (state.dead.has(id)) {
     return { label: "OFFLINE / PARTITIONED", cls: "offline" };
@@ -27,7 +29,8 @@ export function nodeStatus(id) {
       cls: "healed",
     };
   }
-  if (state.paymentTransfer?.destination === id && state.paymentTransfer.phase === "traveling") {
+  const transfer = state.paymentTransfer;
+  if (transfer?.destination === id && transfer.phase === "traveling") {
     return { label: "INCOMING PAYMENT…", cls: "healed" };
   }
   const bal = resolveNodeBalances(id);
@@ -44,6 +47,7 @@ export function nodeStatus(id) {
   }
   const rq = state.liquidity.byNode.get(id);
   if (rq && Date.now() - rq.at < 120_000) {
+    /** @type {Record<string, string>} */
     const labels = {
       funded: "HUB FUNDED (LIQUIDITY OK)",
       faucet: "NEEDS TESTNET FAUCET",
@@ -56,7 +60,9 @@ export function nodeStatus(id) {
   return { label: "ACTIVE (FNN SYNCED)", cls: "active" };
 }
 
+/** @param {number | null} id @param {number} clientX @param {number} clientY */
 export function updateTooltip(id, clientX, clientY) {
+  if (!faTooltip) return;
   if (!id) {
     faTooltip.classList.remove("visible");
     faTooltip.setAttribute("aria-hidden", "true");
@@ -72,7 +78,7 @@ export function updateTooltip(id, clientX, clientY) {
   const row = Math.floor(idx / dim);
 
   const linkRows = links.map(({ peer, kind }) => {
-    const st = PATH_STYLES[kind];
+    const st = PATH_STYLES[/** @type {keyof typeof PATH_STYLES} */ (kind)];
     const live = !state.dead.has(peer);
     const comm = isCommLive(peer);
     const tag = comm ? " comm" : "";
@@ -112,6 +118,7 @@ export function updateTooltip(id, clientX, clientY) {
     <div class="fa-row"><span style="color:${PATH_STYLES.mfa.color}">●</span> ${PATH_STYLES.mfa.label}: <span>127.0.0.1:1025</span></div>
   `;
 
+  if (!canvasWrap) return;
   const wrapRect = canvasWrap.getBoundingClientRect();
   let left = clientX - wrapRect.left + 14;
   let top = clientY - wrapRect.top + 14;
@@ -130,6 +137,7 @@ export function updateTooltip(id, clientX, clientY) {
 }
 
 export function hideTooltip() {
+  if (!faTooltip) return;
   faTooltip.classList.remove("visible");
   faTooltip.setAttribute("aria-hidden", "true");
 }

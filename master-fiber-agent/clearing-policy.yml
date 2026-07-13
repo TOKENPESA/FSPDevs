@@ -1,0 +1,7 @@
+# Regional clearinghouse open parameters (IntentSwapParameters)
+max_volume_shannons: 500000000
+fx_spread_bps: 25
+require_fiat_collateral: true
+hub_routing_whitelist:
+  - Agent-Localized-RUSD-Vault
+  - Corporate-Clearing-Vault

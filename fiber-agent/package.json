@@ -4,6 +4,17 @@
   "type": "module",
   "scripts": {
     "test": "cargo test",
-    "daemon": "cargo run --bin fiber-agent-daemon"
+    "daemon": "cargo run --bin fiber-agent-daemon",
+    "tauri": "tauri",
+    "sync:sidecar-ui": "node ../scripts/sync-sidecar-ui.mjs",
+    "tauri:dev": "npm run sync:sidecar-ui && tauri dev",
+    "tauri:dev:44": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev-fa.ps1 -AgentId 44 -SyncUi",
+    "tauri:dev:45": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev-fa.ps1 -AgentId 45 -SyncUi",
+    "tauri:run:44": "powershell -ExecutionPolicy Bypass -File scripts/run-fa-sidecar.ps1 -AgentId 44",
+    "tauri:run:45": "powershell -ExecutionPolicy Bypass -File scripts/run-fa-sidecar.ps1 -AgentId 45",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
   }
 }

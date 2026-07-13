@@ -1,3 +1,5 @@
+use std::env;
+
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 
 use crate::constants::{DEV_KEY_MARKER_BYTE, RING_SIZE};
@@ -32,6 +34,28 @@ pub fn dev_agent_signing_key_bytes(agent_id: u16) -> [u8; 32] {
     key[1] = agent_id as u8;
     key[31] = DEV_KEY_MARKER_BYTE;
     key
+}
+
+pub fn resolve_production_identity_key() -> Result<SecretKey, MeshError> {
+    if cfg!(debug_assertions) {
+        let dev_bytes = [0x44; 32];
+        return SecretKey::from_slice(&dev_bytes)
+            .map_err(|e| MeshError::CryptoError(e.to_string()));
+    }
+
+    let key_hex = env::var("FSP_AGENT_PRIVATE_KEY")
+        .or_else(|_| env::var("LUME_AGENT_PRIVATE_KEY"))
+        .map_err(|_| {
+        MeshError::InvalidKey(
+            "Production identity key environment variable missing (FSP_AGENT_PRIVATE_KEY)".to_string(),
+        )
+    })?;
+
+    let key_bytes = hex::decode(key_hex.trim()).map_err(|e| {
+        MeshError::InvalidKey(format!("Malformed hex format: {e}"))
+    })?;
+
+    SecretKey::from_slice(&key_bytes).map_err(|e| MeshError::CryptoError(e.to_string()))
 }
 
 pub fn agent_fnn_pubkey_result(agent_id: u16) -> Result<String, MeshError> {
@@ -76,6 +100,12 @@ pub fn peer_id_from_agent_pubkey(peer_public_key: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_production_identity_key_uses_dev_vector_in_debug() {
+        let key = resolve_production_identity_key().expect("debug dev key");
+        assert_eq!(key.secret_bytes(), [0x44; 32]);
+    }
 
     #[test]
     fn agent_fnn_pubkey_is_secp256k1_hex() {

@@ -1,4 +1,4 @@
-# Start all 1024 FA sidecars + embedded FNN in one process (recommended for full mesh).
+﻿# Start all 1024 FA sidecars + embedded FNN in one process (recommended for full mesh).
 param(
     [int]$From = 1,
     [int]$To = 0,
@@ -56,7 +56,7 @@ Then open the dashboard (npm run serve:dashboard) and click Connect.
 "@
 }
 
-Write-Host "=== TPXDevs 1024-FA Mesh Fleet ===" -ForegroundColor Cyan
+Write-Host "=== FSPDevs 1024-FA Mesh Fleet ===" -ForegroundColor Cyan
 Write-Host "Checking MFA is up before launching $To sidecars..."
 Wait-MfaReady
 Write-Host ""
@@ -68,7 +68,7 @@ $env:MESH_FLEET_QUIET = "true"
 $env:MESH_FLEET_STAGGER_MS = "15"
 $env:MESH_FLEET_HEARTBEAT_MS = "30000"
 $env:MESH_PUBKEY_REGISTRY_PATH = $pubkeys
-$env:MFA_AGENT_WS_TOKEN = if ($env:MFA_AGENT_WS_TOKEN) { $env:MFA_AGENT_WS_TOKEN } else { "tpxdevs-local-ws" }
+$env:MFA_AGENT_WS_TOKEN = if ($env:MFA_AGENT_WS_TOKEN) { $env:MFA_AGENT_WS_TOKEN } else { "fspdevs-local-ws" }
 $env:MFA_HOST = if ($env:MFA_HOST) { $env:MFA_HOST } else { "127.0.0.1:1025" }
 
 if ($LiveFnn) {

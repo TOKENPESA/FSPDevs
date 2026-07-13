@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fiber Sidecar Operations Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles/console.css">
+</head>
+<body class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark">FSP</div>
+      <div class="brand-copy">
+        <div class="brand-title">Sidecar Console</div>
+        <div class="brand-subtitle" id="brand-subtitle">FA— · loading</div>
+      </div>
+    </div>
+
+    <div class="sidebar-search">
+      <span class="search-icon" aria-hidden="true"></span>
+      <input type="search" id="nav-search" placeholder="Search routes…" aria-label="Search navigation">
+    </div>
+
+    <nav class="sidebar-nav" id="sidebar-nav" aria-label="Sidecar modules"></nav>
+  </aside>
+
+  <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+  <div class="app-main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button type="button" class="icon-btn icon-btn-ghost" id="sidebar-toggle" aria-label="Toggle sidebar">
+          <span class="ui-icon ui-icon-menu" aria-hidden="true"></span>
+        </button>
+        <div class="topbar-title">Operations Console</div>
+      </div>
+      <div class="topbar-right">
+        <button type="button" class="icon-btn icon-btn-ghost" aria-label="Notifications">
+          <span class="ui-icon ui-icon-bell" aria-hidden="true"></span>
+        </button>
+        <div class="user-chip">
+          <div class="user-avatar">FA</div>
+          <div class="user-copy">
+            <div class="user-name">Node —</div>
+          </div>
+        </div>
+        <div class="topbar-status">
+          <time class="clock-badge" id="clock-badge" title="Current time">--</time>
+          <time class="last-sync-badge" id="last-sync-badge" title="Last sidecar sync">Last sync · pending</time>
+        </div>
+      </div>
+    </header>
+
+    <main class="content-area" id="main-content" aria-live="polite"></main>
+  </div>
+
+  <button type="button" class="fab" aria-label="Open support chat">
+    <span class="ui-icon ui-icon-chat" aria-hidden="true"></span>
+  </button>
+
+  <script type="module" src="js/app.js"></script>
+  <script type="module" src="js/shell-icons.js"></script>
+</body>
+</html>

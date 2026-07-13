@@ -1,4 +1,4 @@
-# Connect to public Fiber testnet relay and open a funded CKB channel.
+﻿# Connect to public Fiber testnet relay and open a funded CKB channel.
 param(
     [string]$RpcUrl = "http://127.0.0.1:8227",
     [string]$PeerPubkey = "02b6d4e3ab86a2ca2fad6fae0ecb2e1e559e0b911939872a90abdda6d20302be71",
@@ -13,7 +13,7 @@ if (-not (Test-Path $cli)) {
     Write-Error "fnn-cli.exe not found in $root"
 }
 
-$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "tpxdevs-local" }
+$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "fspdevs-local" }
 
 Write-Host "=== Fiber testnet public channel setup ===" -ForegroundColor Cyan
 Write-Host "RPC:    $RpcUrl"

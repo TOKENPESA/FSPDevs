@@ -1,0 +1,32 @@
+[package]
+name = "fiber_agent_desktop"
+version = "1.0.0"
+description = "Fiber Agent desktop shell — mobile money float bridge"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+fiber_agent = { package = "fiber_agent_sidecar", path = ".." }
+mesh-core = { path = "../../mesh-core" }
+qrcode = "0.14"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[lib]
+name = "fiber_agent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# plist 1.9.0 on crates.io still pins quick-xml ^0.39 (RUSTSEC-2026-0194/0195).
+# Upstream fix merged 2026-07-03; remove this patch once plist >1.9.0 is published.
+[patch.crates-io]
+plist = { git = "https://github.com/ebarnard/rust-plist", rev = "0a2f9e79fe4b85abcfb8013a9f3c97e490750b50" }
+
+[workspace]

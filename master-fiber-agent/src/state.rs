@@ -1,9 +1,13 @@
 use crate::graph::CompleteMeshGraph;
+use crate::mfa_storage::MfaModuleStore;
+use crate::plugin_registry::PluginRegistry;
+use crate::policies::registry::PluginHotReloader;
+use crate::papss::PapssIntegrationGateway;
 use crate::payment::PaymentEngineState;
 use crate::types::{MeshPulsePayload, PaymentExecResult};
-use crate::workers::background::{FundingLockManager, LiquidityCopilot};
+use crate::workers::background::{ExpiringLockManager, LiquidityCopilot};
 use axum::extract::ws::Message as AxumMessage;
-use mesh_core::{merge_registry_json, MeshPubkeyRegistry};
+use mesh_core::{merge_registry_json, AssetRegistryHub, ComplianceAuditEnvelope, MeshPubkeyRegistry};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::sync::atomic::{AtomicU16, AtomicU64};
@@ -28,13 +32,18 @@ pub struct AppState {
     pub peers: PeerRegistry,
     pub graph: SharedGraph,
     pub ui_broadcast: broadcast::Sender<String>,
+    pub compliance_broadcast: broadcast::Sender<ComplianceAuditEnvelope>,
+    /// Single-use tickets for short-lived compliance stream / connection handoff.
+    pub compliance_tickets: Arc<crate::auth::EphemeralTicketRegistry>,
     pub alert_dedupe: RwLock<HashSet<(u16, u16)>>,
     pub alert_order: RwLock<VecDeque<(u16, u16)>>,
     /// Nodes currently undergoing on-chain capacity injection (time-bounded locks).
-    pub active_funding_locks: RwLock<FundingLockManager>,
+    pub active_funding_locks: RwLock<ExpiringLockManager>,
     pub hub_config: HubConfig,
     /// Multi-hub storage pipeline registry (vault accounts and in-flight intent swaps).
     pub multi_hub_registry: RwLock<crate::hub::MultiHubRegistry>,
+    /// Bearer / query token for mutating HTTP routes and compliance SSE.
+    pub api_token: String,
     pub agent_ws_token: String,
     /// Latest Fiber node pubkeys reported by sidecar heartbeats.
     pub agent_fnn_pubkeys: RwLock<HashMap<u16, String>>,
@@ -48,6 +57,19 @@ pub struct AppState {
     /// Latest outbound shannons per agent (from heartbeats) for the liquidity copilot.
     pub agent_liquidity_snap: RwLock<HashMap<u16, u64>>,
     pub liquidity_copilot: RwLock<LiquidityCopilot>,
+    pub asset_registry: AssetRegistryHub,
+    pub papss_gateway: Option<PapssIntegrationGateway>,
+    pub enterprise_clearinghouse: Arc<crate::clearinghouse::EnterpriseClearinghouse>,
+    /// Per-hub liquidity pools for concurrent intent-swap reservation.
+    pub regional_clearing: Arc<crate::clearing::RegionalClearinghouseEngine>,
+    /// Latest hardware power profile reported by edge sidecars (for routing timeout tuning).
+    pub edge_hardware_profiles: Arc<RwLock<HashMap<u16, String>>>,
+    /// Policy plugins — business/regulatory hooks (never lock the graph).
+    pub plugin_registry: PluginRegistry,
+    /// SQLite app-store persistence for UI-managed plugin installs.
+    pub module_store: Arc<MfaModuleStore>,
+    /// Runtime hot-swap coordinator for plugins.
+    pub plugin_hot_reloader: Arc<PluginHotReloader>,
 }
 
 /// Loads mesh pubkey registry from env, preserving MFA startup log lines.
@@ -66,4 +88,10 @@ pub fn load_mesh_pubkey_registry() -> MeshPubkeyRegistry {
         merge_registry_json(&mut map, &raw);
     }
     MeshPubkeyRegistry::from_map(map)
+}
+
+impl AppState {
+    pub fn fiat_to_shannons(&self, source_iso: &str, fiat_amount: f64) -> u64 {
+        crate::config::fiat_to_shannons(source_iso, fiat_amount)
+    }
 }

@@ -1,5 +1,11 @@
-import { COMM_TTL_MS } from "../config.js";
+/** @typedef {import('../types.js').MonitorEnvelope} MonitorEnvelope */
+
+import { COMM_TTL_MS, MFA_SIMULATION_URL, mfaApiToken, mfaAuthedUrl, mfaAuthHeaders } from "../config.js";
+import { connectWebSocketWithTimeout, fetchWithTimeout } from "../fetch-timeout.js";
+import { createLogger } from "../logger.js";
 import { formatShannons } from "../format.js";
+import { $input } from "../dom.js";
+import { errorMessage } from "../../packages/fsp-ui-types/errors.js";
 import {
   appendLogEvent,
   logEvent,
@@ -25,9 +31,52 @@ const metricTick = document.getElementById("metric-tick");
 const metricLive = document.getElementById("metric-live");
 const metricDead = document.getElementById("metric-dead");
 const metricHeals = document.getElementById("metric-heals");
-const mfaWsInput = document.getElementById("mfa-ws");
+const mfaWsInput = $input("mfa-ws");
+const log = createLogger("monitor");
 
+/** @type {ReturnType<typeof setTimeout> | null} */
 let monitorReconnectTimer = null;
+
+function monitorWsUrl() {
+  const raw = mfaWsInput?.value?.trim() ?? "ws://127.0.0.1:1025/ws/monitor";
+  return mfaAuthedUrl(raw);
+}
+
+function dashboardOriginHint() {
+  const origin = window.location.origin;
+  if (window.location.protocol === "file:") {
+    return "Open via http://127.0.0.1:8088 (npm run serve:mfa), not as a local file.";
+  }
+  const host = window.location.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") {
+    return `Page origin ${origin} is not loopback — MFA blocks cross-origin monitor WS. Use http://127.0.0.1:8088`;
+  }
+  return "";
+}
+
+async function verifyMfaApiToken() {
+  try {
+    const res = await fetchWithTimeout(
+      MFA_SIMULATION_URL,
+      {
+        method: "POST",
+        headers: mfaAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ edge_nodes: 16 }),
+      },
+      5000,
+    );
+    if (res.status === 401) {
+      return {
+        ok: false,
+        message:
+          "API token rejected — clear localStorage key fspdevs-mfa-api-token or set MFA_API_TOKEN=fspdevs-local-api-devonly when starting MFA.",
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
+  }
+}
 
 function bumpMonitorMetrics() {
   state.tick += 1;
@@ -50,11 +99,10 @@ export function scheduleMonitorReconnect() {
 }
 
 /** Handles schema-versioned monitor envelopes from MFA (`MonitorEnvelope`). */
+/** @param {MonitorEnvelope} envelope @returns {boolean} */
 export function handleVersionedMonitorEnvelope(envelope) {
   if (!envelope.schema_version || !envelope.event) {
-    console.warn(
-      "⚠️ [SKIPPED FRAME] Received unversioned or non-standard payload structure.",
-    );
+    log.warn("skipped unversioned monitor frame");
     return false;
   }
 
@@ -63,10 +111,10 @@ export function handleVersionedMonitorEnvelope(envelope) {
   switch (eventType) {
     case "COPILOT_PREDICTION_ALERT":
       appendLogEvent(
-        `📈 [COPILOT] Node FA-${payload.node} running low! Exhaustion expected in ${Math.round(payload.seconds_remaining ?? 0)}s`,
+        `📈 [COPILOT] Node FA-${payload.node} running low! Exhaustion expected in ${Math.round(Number(payload.seconds_remaining ?? 0))}s`,
         "warn",
       );
-      updateNodeVisualState(payload.node, "WARN_DRAIN");
+      updateNodeVisualState(Number(payload.node), "WARN_DRAIN");
       break;
 
     case "REQUITY_INJECTION":
@@ -74,7 +122,7 @@ export function handleVersionedMonitorEnvelope(envelope) {
         `💰 [LIQUIDITY] Core Hub injected capacity into FA-${payload.node} via [${payload.vault ?? "hub"}]`,
         "liquidity",
       );
-      updateNodeVisualState(payload.node, "INJECTING");
+      updateNodeVisualState(Number(payload.node), "INJECTING");
       handleLiquidityEvent({
         event: "LIQUIDITY_INJECTION",
         node: payload.node,
@@ -91,13 +139,21 @@ export function handleVersionedMonitorEnvelope(envelope) {
 
     case "INTENT_SWAP_SUCCESS":
       appendLogEvent(
-        `🔄 [SWAP] Atomic off-chain swap accomplished: ${formatShannons(payload.amount ?? 0)}`,
+        `🔄 [ENTERPRISE CLEARING] Cross-hub intent swap: ${formatShannons(payload.amount ?? 0)} shannons`,
         "liquidity",
       );
       break;
 
+    case "BALANCE_DEPLETED":
+    case "TELEMETRY_BALANCE_DEPLETED":
+      appendLogEvent(
+        `🚨 [TELEMETRY] BalanceDepleted on FA-${payload.node ?? payload.agent_id ?? "?"} · enterprise refuel triggered`,
+        "warn",
+      );
+      break;
+
     default:
-      console.log(`ℹ️ [MONITOR] Processing versioned channel event: ${eventType}`);
+      logEvent(`Monitor event: ${eventType}`, "heal");
   }
 
   bumpMonitorMetrics();
@@ -108,37 +164,36 @@ export function handleVersionedMonitorEnvelope(envelope) {
 /**
  * Lightweight WebSocket bootstrap for embedders (schema-versioned frames only).
  * The full demo shell should use `connectMonitor()` for MFA health checks and legacy events.
+ * @param {string} wsUrl
  */
-export function initializeMonitorSocket(wsUrl) {
-  const socket = new WebSocket(wsUrl);
+export async function initializeMonitorSocket(wsUrl) {
+  const socket = await connectWebSocketWithTimeout(wsUrl);
   state.ws = socket;
 
   socket.onmessage = (event) => {
     try {
-      const envelope = JSON.parse(event.data);
+      const envelope = JSON.parse(String(event.data));
       if (!handleVersionedMonitorEnvelope(envelope)) {
         handleMonitorMessage(event.data);
       }
     } catch (err) {
-      console.error(
-        "❌ [PARSING FAULT] Failed to deconstruct websocket event payload:",
-        err,
-      );
+      log.error("monitor payload parse failed", err);
     }
   };
 
   socket.onclose = () => {
-    console.log("🔌 [MONITOR DISCONNECTED] Retrying socket handshake loop...");
-    setTimeout(() => initializeMonitorSocket(wsUrl), 3000);
+    logEvent("Monitor disconnected — retrying…", "warn");
+    setTimeout(() => void initializeMonitorSocket(wsUrl), 3000);
   };
 
   return socket;
 }
 
+/** @param {unknown} raw */
 export function handleMonitorMessage(raw) {
   let payload;
   try {
-    payload = JSON.parse(raw);
+    payload = JSON.parse(String(raw));
   } catch {
     logEvent(`Ignored: ${raw}`);
     return;
@@ -155,31 +210,31 @@ export function handleMonitorMessage(raw) {
   bumpMonitorMetrics();
   if (payload.event === "MESH_HEAL") {
     state.healCount += 1;
-    state.dead.add(payload.removed);
-    state.healed.add(payload.added);
-    state.healLinks.push({ from: payload.node, to: payload.added });
+    state.dead.add(Number(payload.removed));
+    state.healed.add(Number(payload.added));
+    state.healLinks.push({ from: Number(payload.node), to: Number(payload.added) });
     if (state.healLinks.length > 8) state.healLinks.shift();
-    touchCommNode(payload.node, [payload.added], 1);
-    touchCommEdge(payload.node, payload.added, "heal");
+    touchCommNode(Number(payload.node), [Number(payload.added)], 1);
+    touchCommEdge(Number(payload.node), Number(payload.added), "heal");
     logEvent(
       `MESH_HEAL: FA-${payload.node} swapped FA-${payload.removed} → FA-${payload.added}`,
       "heal",
     );
     markDirty();
   } else if (payload.event === "MESH_HEARTBEAT") {
-    state.dead.delete(payload.node);
-    const neighbors = payload.neighbors ?? [];
-    const channelCount = payload.channels ?? neighbors.length ?? 0;
+    state.dead.delete(Number(payload.node));
+    const neighbors = Array.isArray(payload.neighbors) ? payload.neighbors.map(Number) : [];
+    const channelCount = Number(payload.channels ?? neighbors.length ?? 0);
     const balances = {
-      outbound: payload.outbound_shannons ?? null,
+      outbound: payload.local_capacity_shannons ?? payload.outbound_shannons ?? null,
       inbound: payload.inbound_shannons ?? null,
     };
-    touchCommNode(payload.node, neighbors, channelCount, balances);
+    touchCommNode(Number(payload.node), neighbors, channelCount, balances);
     if (balances.outbound != null || balances.inbound != null) {
       setNodeLedger(
-        payload.node,
-        balances.outbound ?? resolveNodeBalances(payload.node)?.outbound ?? 0,
-        balances.inbound ?? resolveNodeBalances(payload.node)?.inbound ?? 0,
+        Number(payload.node),
+        Number(balances.outbound ?? resolveNodeBalances(Number(payload.node))?.outbound ?? 0),
+        Number(balances.inbound ?? resolveNodeBalances(Number(payload.node))?.inbound ?? 0),
       );
     }
     logEvent(
@@ -192,6 +247,12 @@ export function handleMonitorMessage(raw) {
       `⚠️ System Congestion: Skipped ${payload.skipped} frames due to processing lag.`,
       "warn",
     );
+  } else if (payload.status === "ALERT_BALANCE_DEPLETED" || payload.event === "ALERT_BALANCE_DEPLETED") {
+    const node = payload.node ?? payload.agent_id ?? "?";
+    logEvent(
+      `🚨 [TELEMETRY] ALERT_BALANCE_DEPLETED · FA-${node} · EnterpriseClearinghouse refuel pipeline`,
+      "warn",
+    );
   } else if (!handlePaymentEvent(payload) && !handleLiquidityEvent(payload)) {
     logEvent(JSON.stringify(payload));
   }
@@ -202,15 +263,15 @@ export async function connectMonitor() {
     state.ws.close();
     state.ws = null;
   }
-  if (window.location.protocol === "file:") {
-    logEvent(
-      "Open the dashboard via http://127.0.0.1:8088 (npm run serve:dashboard), not as a local file",
-      "warn",
-    );
+
+  const originHint = dashboardOriginHint();
+  if (originHint) {
+    logEvent(originHint, "warn");
     if (connStatus) connStatus.textContent = "Wrong URL";
     return;
   }
-  const url = mfaWsInput?.value.trim() ?? "ws://127.0.0.1:1025/ws/monitor";
+
+  const url = monitorWsUrl();
   if (!url.startsWith("ws://127.0.0.1") && !url.startsWith("ws://localhost")) {
     logEvent("Monitor URL must be ws://127.0.0.1 or ws://localhost", "warn");
     return;
@@ -230,7 +291,27 @@ export async function connectMonitor() {
     return;
   }
 
-  const ws = new WebSocket(url);
+  const tokenCheck = await verifyMfaApiToken();
+  if (!tokenCheck.ok) {
+    logEvent(tokenCheck.message ?? "Token check failed", "warn");
+    if (connStatus) connStatus.textContent = "Auth error";
+    scheduleMonitorReconnect();
+    return;
+  }
+
+  let ws;
+  try {
+    ws = await connectWebSocketWithTimeout(url);
+  } catch (error) {
+    log.error("monitor websocket connect failed", error);
+    if (connStatus) connStatus.textContent = "WS error";
+    logEvent(
+      `WebSocket failed — MFA on :1025, dashboard on :8088, token ${mfaApiToken().slice(0, 6)}…`,
+      "warn",
+    );
+    scheduleMonitorReconnect();
+    return;
+  }
   state.ws = ws;
   ws.onopen = () => {
     if (connStatus) connStatus.textContent = "Connected";
@@ -250,7 +331,10 @@ export async function connectMonitor() {
   };
   ws.onerror = () => {
     if (connStatus) connStatus.textContent = "WS error";
-    logEvent("WebSocket error — confirm MFA is on :1025 and dashboard is served on :8088", "warn");
+    logEvent(
+      "WebSocket error — use http://127.0.0.1:8088, MFA on :1025, dev token fspdevs-local-api-devonly",
+      "warn",
+    );
   };
   ws.onmessage = (ev) => handleMonitorMessage(ev.data);
 }

@@ -4,7 +4,9 @@ import {
   MFA_ROUTE_URL,
   MFA_SIMULATION_URL,
   RING_MAX,
+  mfaAuthHeaders,
 } from "../config.js";
+import { fetchWithTimeout } from "../fetch-timeout.js";
 import { formatGridDim, formatShannons } from "../format.js";
 import { layoutNodes } from "../canvas/layout.js";
 import { hideTooltip } from "../canvas/tooltip.js";
@@ -13,6 +15,8 @@ import {
   startPaymentTransfer,
 } from "../events/payment.js";
 import { updateHubPanel } from "../events/liquidity.js";
+import { $, $input, requireInput, setText } from "../dom.js";
+import { errorMessage } from "../../packages/fsp-ui-types/errors.js";
 import {
   logEvent,
   markDirty,
@@ -23,48 +27,63 @@ import {
 } from "../state.js";
 import { buildMeshEdges } from "../topology.js";
 
-const sizeLabel = document.getElementById("size-label");
-const edgeCountInput = document.getElementById("edge-node-count");
-const sizeInput = document.getElementById("network-size");
-const gridDimLabel = document.getElementById("grid-dim-label");
-const meshSubtitle = document.getElementById("mesh-subtitle");
-const fleetHint = document.getElementById("fleet-hint");
+const sizeLabel = $("size-label");
+const edgeCountInput = $input("edge-node-count");
+const sizeInput = $input("network-size");
+const gridDimLabel = $("grid-dim-label");
+const meshSubtitle = $("mesh-subtitle");
+const fleetHint = $("fleet-hint");
 const routeMaxLabels = document.querySelectorAll("[id^='route-max-label']");
-const routeSourceInput = document.getElementById("route-source");
-const routeDestInput = document.getElementById("route-dest");
-const routeAmountInput = document.getElementById("route-amount");
-const metricRoute = document.getElementById("metric-route");
-const metricLive = document.getElementById("metric-live");
+const routeSourceInput = $input("route-source");
+const routeDestInput = $input("route-dest");
+const routeAmountInput = $input("route-amount");
+const metricRoute = $("metric-route");
+const metricLive = $("metric-live");
 
+/** @param {Record<string, unknown>} payload @returns {boolean} */
 export function eventWithinSimulation(payload) {
   const n = state.networkSize;
-  if (payload.node != null && payload.node > n) return false;
-  if (payload.source != null && payload.source > n) return false;
-  if (payload.destination != null && payload.destination > n) return false;
-  if (payload.removed != null && payload.removed > n) return false;
-  if (payload.added != null && payload.added > n) return false;
+  const node = Number(payload.node);
+  const source = Number(payload.source);
+  const destination = Number(payload.destination);
+  const removed = Number(payload.removed);
+  const added = Number(payload.added);
+  if (payload.node != null && node > n) return false;
+  if (payload.source != null && source > n) return false;
+  if (payload.destination != null && destination > n) return false;
+  if (payload.removed != null && removed > n) return false;
+  if (payload.added != null && added > n) return false;
   return true;
 }
 
+/** @param {number} n */
 export function updateEdgeNodeUi(n) {
-  sizeLabel.textContent = String(n);
-  edgeCountInput.value = String(n);
-  sizeInput.value = String(n);
-  gridDimLabel.textContent = formatGridDim(n);
-  meshSubtitle.textContent = `${n}-node lattice mesh (${formatGridDim(n)} grid) · live MFA stream`;
-  fleetHint.innerHTML =
-    n >= RING_MAX
-      ? "Full ring — fleet: <code>.\\spawn-mesh-fleet.ps1</code>"
-      : `Only FA-1…${n} on graph & routing — fleet: <code>.\\spawn-mesh-fleet.ps1 -To ${n}</code>`;
-  routeSourceInput.max = String(n);
-  routeDestInput.max = String(n);
+  setText(sizeLabel, String(n));
+  if (edgeCountInput) edgeCountInput.value = String(n);
+  if (sizeInput) sizeInput.value = String(n);
+  setText(gridDimLabel, formatGridDim(n));
+  setText(
+    meshSubtitle,
+    `${n}-node lattice mesh (${formatGridDim(n)} grid) · live MFA stream`,
+  );
+  if (fleetHint) {
+    fleetHint.textContent =
+      n >= RING_MAX
+        ? "Full ring — fleet: .\\spawn-mesh-fleet.ps1"
+        : `Only FA-1…${n} on graph & routing — fleet: .\\spawn-mesh-fleet.ps1 -To ${n}`;
+  }
+  if (routeSourceInput) routeSourceInput.max = String(n);
+  if (routeDestInput) routeDestInput.max = String(n);
   routeMaxLabels.forEach((el) => {
     el.textContent = String(n);
   });
-  if (Number(routeSourceInput.value) > n) routeSourceInput.value = "1";
-  if (Number(routeDestInput.value) > n) routeDestInput.value = String(Math.min(n, Math.max(2, Math.floor(n / 2))));
+  if (routeSourceInput && Number(routeSourceInput.value) > n) routeSourceInput.value = "1";
+  if (routeDestInput && Number(routeDestInput.value) > n) {
+    routeDestInput.value = String(Math.min(n, Math.max(2, Math.floor(n / 2))));
+  }
 }
 
+/** @param {number} newSize */
 function pruneSimulationState(newSize) {
   state.dead.forEach((id) => {
     if (id > newSize) state.dead.delete(id);
@@ -86,7 +105,7 @@ function pruneSimulationState(newSize) {
   for (const [key, meta] of [...state.comm.edges.entries()]) {
     if (meta.a > newSize || meta.b > newSize) state.comm.edges.delete(key);
   }
-  if (state.hoveredNode > newSize) {
+  if (state.hoveredNode != null && state.hoveredNode > newSize) {
     state.hoveredNode = null;
     hideTooltip();
   }
@@ -96,6 +115,10 @@ function pruneSimulationState(newSize) {
   state.paymentTransfer = null;
 }
 
+/**
+ * @param {unknown} raw
+ * @param {{ skipSync?: boolean, skipStorage?: boolean }} [opts]
+ */
 export function applyEdgeNodeCount(raw, { skipSync = false, skipStorage = false } = {}) {
   const newSize = Math.max(1, Math.min(RING_MAX, Math.round(Number(raw) || 1)));
   state.networkSize = newSize;
@@ -105,7 +128,7 @@ export function applyEdgeNodeCount(raw, { skipSync = false, skipStorage = false 
   setNodeArrays(new Float32Array(newSize + 1), new Float32Array(newSize + 1));
   layoutNodes();
   buildMeshEdges();
-  metricLive.textContent = String(state.comm.nodes.size);
+  setText(metricLive, String(state.comm.nodes.size));
   markDirty();
 
   if (!skipStorage) {
@@ -120,11 +143,12 @@ export function applyEdgeNodeCount(raw, { skipSync = false, skipStorage = false 
   }
 }
 
+/** @param {number} n */
 export async function syncSimulationToMfa(n) {
   try {
-    const res = await fetch(MFA_SIMULATION_URL, {
+    const res = await fetchWithTimeout(MFA_SIMULATION_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mfaAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ edge_nodes: n }),
     });
     if (res.ok) {
@@ -137,7 +161,7 @@ export async function syncSimulationToMfa(n) {
 
 export async function loadSimulationFromMfa() {
   try {
-    const res = await fetch(MFA_SIMULATION_URL, { mode: "cors" });
+    const res = await fetchWithTimeout(MFA_SIMULATION_URL, { mode: "cors" });
     if (!res.ok) return;
     const data = await res.json();
     if (data.edge_nodes) {
@@ -148,11 +172,10 @@ export async function loadSimulationFromMfa() {
   }
 }
 
+/** @param {number} [timeoutMs] @returns {Promise<boolean>} */
 export async function fetchHubHealth(timeoutMs = 4000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(MFA_HEALTH_URL, { mode: "cors", signal: controller.signal });
+    const res = await fetchWithTimeout(MFA_HEALTH_URL, { mode: "cors" }, timeoutMs);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (data.hub) {
@@ -170,14 +193,13 @@ export async function fetchHubHealth(timeoutMs = 4000) {
     logEvent(`Hub linked: ${state.hub.rpcUrl} · ${state.hub.fundingShannons}`, "heal");
     return true;
   } catch (err) {
-    state.liquidity.lastEvent = `Hub health check failed: ${err.message}`;
+    state.liquidity.lastEvent = `Hub health check failed: ${errorMessage(err)}`;
     updateHubPanel();
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
+/** @param {HTMLInputElement} input @returns {number} */
 function readRouteNode(input) {
   const n = Number.parseInt(input.value, 10);
   if (!Number.isInteger(n) || n < 1 || n > state.networkSize) {
@@ -192,23 +214,26 @@ export async function routeTransaction() {
   let amount;
 
   try {
-    source = readRouteNode(routeSourceInput);
-    destination = readRouteNode(routeDestInput);
-    amount = Number.parseInt(routeAmountInput.value, 10);
+    const sourceInput = routeSourceInput ?? requireInput("route-source");
+    const destInput = routeDestInput ?? requireInput("route-dest");
+    const amountInput = routeAmountInput ?? requireInput("route-amount");
+    source = readRouteNode(sourceInput);
+    destination = readRouteNode(destInput);
+    amount = Number.parseInt(amountInput.value, 10);
     if (!Number.isFinite(amount) || amount < 1) {
       throw new Error("Amount must be a positive integer");
     }
   } catch (err) {
-    logEvent(err.message, "warn");
+    logEvent(errorMessage(err), "warn");
     return;
   }
 
   logEvent(`Routing & paying FA-${source} → FA-${destination} (${amount} shannons)…`);
 
   try {
-    const res = await fetch(MFA_ROUTE_URL, {
+    const res = await fetchWithTimeout(MFA_ROUTE_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mfaAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         source,
         destination,
@@ -227,7 +252,7 @@ export async function routeTransaction() {
       }
       touchCommNode(data.path[0], [data.path[1]], 1);
       touchCommEdge(source, destination, "mesh");
-      const pathLabel = data.path.map((id) => `FA-${id}`).join(" → ");
+      const pathLabel = data.path.map((/** @type {number} */ id) => `FA-${id}`).join(" → ");
       logEvent(`ROUTE_FOUND (${data.execution_latency_ms}ms): ${pathLabel}`, "heal");
 
       if (data.payment_status === "SUCCESS") {
@@ -259,7 +284,7 @@ export async function routeTransaction() {
         settlePaymentTransfer(false);
       }
       state.activeRoute = [];
-      metricRoute.textContent = "—";
+      setText(metricRoute, "—");
       logEvent(`Route failed: ${data.status || res.status}`, "warn");
       markDirty();
     }
@@ -268,8 +293,8 @@ export async function routeTransaction() {
       settlePaymentTransfer(false);
     }
     state.activeRoute = [];
-    metricRoute.textContent = "—";
-    logEvent(`Route request failed — is MFA running on :1025? (${err.message})`, "warn");
+    setText(metricRoute, "—");
+    logEvent(`Route request failed — is MFA running on :1025? (${errorMessage(err)})`, "warn");
     markDirty();
   }
 }

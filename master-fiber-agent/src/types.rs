@@ -1,3 +1,4 @@
+use mesh_core::types::L2Asset;
 use serde::{Deserialize, Serialize};
 
 pub use mesh_core::MeshPulsePayload;
@@ -44,6 +45,12 @@ pub struct RouteRequestPayload {
     /// When true (default), MFA dispatches a keysend payment on the source sidecar after routing.
     #[serde(default)]
     pub execute: Option<bool>,
+    /// Target L2 asset for asset-aware pathfinding (defaults to CKB native).
+    #[serde(default)]
+    pub target_asset: Option<L2Asset>,
+    /// Optional DIDComm / compliance metadata for policy plugin clearance.
+    #[serde(default)]
+    pub route_metadata: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

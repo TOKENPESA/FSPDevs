@@ -47,13 +47,8 @@ pub fn mesh_unix_timestamp_secs() -> u64 {
 
 pub fn telemetry_canonical_message(payload: &MeshPulsePayload) -> String {
     format!(
-        "telemetry:{}:{}:{}:{}:{}:{}",
-        payload.agent,
-        payload.status,
-        payload.report_target,
-        payload.attempt,
-        payload.timestamp,
-        neighbors_canonical(&payload.active_mesh_neighbors)
+        "telemetry:{}:{}:{}:{}",
+        payload.agent_id, payload.timestamp, payload.nonce, payload.local_capacity_shannons
     )
 }
 
@@ -77,24 +72,25 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_canonical_includes_timestamp() {
+    fn telemetry_canonical_includes_nonce_and_capacity() {
         let payload = MeshPulsePayload {
+            agent_id: 1,
+            timestamp: 1_700_000_000,
+            nonce: 42,
+            local_capacity_shannons: 9_000,
+            public_key_hex: None,
+            signature_hex: None,
             status: "MESH_HEARTBEAT".to_string(),
-            agent: 1,
             active_mesh_neighbors: vec![2, 3],
             report_target: 1,
             attempt: 0,
-            timestamp: 1_700_000_000,
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
         assert_eq!(
             telemetry_canonical_message(&payload),
-            "telemetry:1:MESH_HEARTBEAT:1:0:1700000000:2,3"
+            "telemetry:1:1700000000:42:9000"
         );
     }
 }

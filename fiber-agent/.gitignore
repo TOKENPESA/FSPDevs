@@ -1,1 +1,10 @@
 /target
+/target-fa-*
+src-tauri/.tauri-fa-*.json
+*.env
+.env.*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+**/fa-*.db

@@ -1,0 +1,11 @@
+{
+  "name": "@fspdevs/fsp-ui-types",
+  "version": "1.0.0",
+  "description": "Shared JSDoc types and DOM helpers for FSP dashboard and console UIs",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./dom": "./dom.js",
+    "./errors": "./errors.js"
+  }
+}

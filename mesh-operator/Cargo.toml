@@ -2,7 +2,7 @@
 name = "mesh-operator"
 version = "0.1.0"
 edition = "2021"
-description = "Kubernetes operator CRDs for TPXDevs Fiber Agent mesh fleets"
+description = "Kubernetes operator CRDs for FSPDevs Fiber Agent mesh fleets"
 
 [dependencies]
 kube = { version = "0.98", features = ["derive", "runtime"] }

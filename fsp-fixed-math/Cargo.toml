@@ -1,0 +1,8 @@
+[package]
+name = "fsp-fixed-math"
+version = "1.0.0"
+edition = "2021"
+description = "FSP fixed-point fiat and Shannon atomic math primitives"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

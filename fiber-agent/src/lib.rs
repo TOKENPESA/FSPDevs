@@ -1,12 +1,28 @@
+pub mod api;
+pub mod clearing_client;
 pub mod daemon;
+pub mod fees;
+pub mod fiat_bridge;
 pub mod fnn_client;
 pub mod hot_swap;
 pub mod identity;
 pub mod mesh;
 pub mod mesh_ports;
+pub mod mfa_control_bus;
+pub mod modules;
 pub mod payment;
+pub mod peer_packet;
+pub mod power;
 pub mod storage;
+pub mod storage_error;
 pub mod telemetry;
+pub mod module_catalog;
+pub mod module_host;
+pub mod module_profile;
+pub mod module_registry;
+pub mod module_system;
+pub mod utility_runtime;
+pub mod dicoba_bridge;
 
 use std::env;
 
@@ -14,17 +30,49 @@ use fnn_client::{FiberNodeRpc, LiveFnnClient, SimulatedFnnClient};
 use secp256k1::{PublicKey, Secp256k1};
 use serde::{Deserialize, Serialize};
 
-pub use daemon::{run_agent_sidecar, SidecarConfig};
+pub use api::spawn_module_api_server;
+pub use clearing_client::{mfa_clearing_url, post_float_crisis_to_mfa};
+pub use daemon::{run_agent_sidecar, run_utility_sidecar_loop, spawn_sidecar_mfa_control_ws, SidecarConfig};
+pub use mfa_control_bus::MfaControlBus;
+pub use fsp_fixed_math::TelcoFloatFixedPoint;
+pub use fees::FeeCalculationEngine;
+pub use fiat_bridge::MobileMoneyFloatBridge;
 pub use hot_swap::{execute_hot_swap, refresh_pubkey_cache};
-pub use identity::{attach_telemetry_signature, resolve_agent_secret_key, resolve_agent_signing_key};
+pub use identity::{
+    attach_telemetry_signature, load_sidecar_identity_key, resolve_agent_secret_key,
+    resolve_agent_signing_key,
+};
 pub use mesh::{
-    mesh_unix_timestamp_secs, parse_agent_id, resolve_open_channel_shannons, MeshPubkeyRegistry,
+    mesh_unix_timestamp_secs, parse_agent_id, resolve_dicoba_member_id,
+    resolve_local_dicoba_member_id, resolve_open_channel_shannons, MeshPubkeyRegistry,
     MeshPulsePayload, RING_SIZE,
 };
 pub use mesh_ports::{parse_fleet_range, resolve_fnn_rpc_url};
-pub use payment::execute_mesh_payment;
-pub use storage::AgentDb;
-pub use telemetry::{flush_queued_telemetry, post_telemetry, send_or_queue_telemetry};
+pub use payment::{execute_fiber_multihop_payment, execute_mesh_payment};
+pub use power::{AdaptivePowerController, PowerProfile};
+pub use storage::{AgentDb, AsyncDbQueue, DEFAULT_DB_WRITE_QUEUE_CAPACITY};
+pub use storage_error::sanitize_storage_error;
+pub use dicoba_bridge::DicobaEdgeClient;
+pub use modules::dicoba_module::DicobaModule;
+pub use modules::fiat_bridge_module::FiatBridgeModule;
+pub use modules::fiber_agent_swarm::AutonomousMarketMakerModule;
+pub use modules::lume_yielding::LumeYieldingModule;
+pub use modules::securities_compliance::SecuritiesComplianceModule;
+pub use module_catalog::{allowed_methods, is_allowed_method, is_known_module_id, KNOWN_MODULE_IDS};
+pub use module_host::SidecarHost;
+pub use module_profile::{
+    load_sidecar_profile, profile_from_preset, resolve_profile_path, SidecarProfile,
+    SidecarProfilePreset,
+};
+pub use module_registry::{boot_sidecar_host, SidecarBootContext};
+pub use module_system::SidecarModule;
+pub use modules::telco_sweep::TelcoB2cFiatSweepModule;
+pub use telemetry::{
+    flush_queued_telemetry, post_telemetry, prepare_ordered_telemetry_flush, send_or_queue_telemetry,
+};
+pub use utility_runtime::UtilityRuntime;
+
+use mesh_core::types::AssetCapacity;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MeshChannelState {
@@ -40,6 +88,11 @@ pub struct MeshChannelState {
     pub local_balance_shannons: u64,
     #[serde(default)]
     pub remote_balance_shannons: u64,
+    /// Multi-asset HTLC balances on the local side (RGB++/UDT when present).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_capacities: Vec<AssetCapacity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_capacities: Vec<AssetCapacity>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -90,6 +143,14 @@ pub fn agent_fnn_pubkey(agent_id: u16) -> String {
 
 pub fn peer_id_from_agent_pubkey(peer_public_key: &str) -> Option<u16> {
     mesh_core::peer_id_from_agent_pubkey(peer_public_key)
+}
+
+/// Stable JunguKuu vault identifier derived from the group name.
+pub fn resolve_dicoba_vault_id(group_name: &str) -> uuid::Uuid {
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!("fspdevs-dicoba-vault-{group_name}").as_bytes(),
+    )
 }
 
 pub fn aggregate_active_balances(channels: &[MeshChannelState]) -> (u64, u64) {
@@ -158,6 +219,8 @@ mod tests {
                 channel_id: None,
                 local_balance_shannons: 100,
                 remote_balance_shannons: 200,
+                local_capacities: vec![],
+                remote_capacities: vec![],
             },
             MeshChannelState {
                 peer_id: 46,
@@ -168,6 +231,8 @@ mod tests {
                 channel_id: None,
                 local_balance_shannons: 1_000,
                 remote_balance_shannons: 2_000,
+                local_capacities: vec![],
+                remote_capacities: vec![],
             },
         ];
 
@@ -180,18 +245,19 @@ mod tests {
             resolve_agent_secret_key(44).expect("resolve dev signing key for FA-44");
 
         let payload = MeshPulsePayload {
+            agent_id: 44,
+            timestamp: mesh_unix_timestamp_secs(),
+            nonce: 1,
+            local_capacity_shannons: 0,
+            public_key_hex: None,
+            signature_hex: None,
             status: "MESH_HEARTBEAT".to_string(),
-            agent: 44,
             active_mesh_neighbors: vec![45, 46],
             report_target: 44,
             attempt: 0,
-            timestamp: mesh_unix_timestamp_secs(),
-            public_key_hex: None,
-            signature_hex: None,
             fnn_pubkey_hex: None,
             peer_connect_address: None,
-            outbound_shannons: None,
-            inbound_shannons: None,
+            asset_capacities: Vec::new(),
         };
 
         let signed = attach_telemetry_signature(payload, &secret_key);

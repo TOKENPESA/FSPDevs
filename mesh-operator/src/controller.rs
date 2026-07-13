@@ -155,8 +155,8 @@ mod tests {
             },
             spec: MeshFleetSpec {
                 replicas: 4,
-                agent_image: "tpxdevs/fiber-agent:latest".to_string(),
-                fnn_image: "tpxdevs/fnn:latest".to_string(),
+                agent_image: "fspdevs/fiber-agent:latest".to_string(),
+                fnn_image: "fspdevs/fnn:latest".to_string(),
                 mfa_target_url: "http://127.0.0.1:1025".to_string(),
                 base_rpc_port: 18_000,
             },
@@ -170,7 +170,7 @@ mod tests {
             18_031,
             &fleet,
             OwnerReference {
-                api_version: "tpxdevs.infra/v1alpha1".to_string(),
+                api_version: "fspdevs.infra/v1alpha1".to_string(),
                 kind: "MeshFleet".to_string(),
                 name: "test-fleet".to_string(),
                 uid: "uid".to_string(),

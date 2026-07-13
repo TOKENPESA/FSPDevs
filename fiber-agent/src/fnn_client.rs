@@ -1,13 +1,32 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::mesh::{mesh_neighbor_ids, shannons_to_hex, DEFAULT_OPEN_CHANNEL_SHANNONS};
+use mesh_core::types::{AssetCapacity, L2Asset};
 use crate::{agent_fnn_pubkey, peer_id_from_agent_pubkey, MeshChannelState};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RgbCellCapacity {
+    pub cell_type_hash: String,
+    pub amount_atomic: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fractional_nanos: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BitcoinUtxoBinding {
+    pub txid: String,
+    pub vout: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ckb_cell_id: Option<String>,
+}
 
 #[derive(Serialize)]
 struct RpcRequest {
@@ -23,6 +42,18 @@ struct ListChannelsRpcResult {
 }
 
 #[derive(Deserialize)]
+struct FnnAssetBalance {
+    #[serde(default, alias = "asset_type")]
+    asset: Option<String>,
+    #[serde(default)]
+    amount: Option<Value>,
+    #[serde(default)]
+    fractional_nanos: Option<u64>,
+    #[serde(default, alias = "cell_type_hash")]
+    rgb_cell_type_hash: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct FnnChannel {
     #[serde(default, alias = "channel_id")]
     channel_id: Option<String>,
@@ -34,6 +65,14 @@ struct FnnChannel {
     local_balance: Option<Value>,
     #[serde(default)]
     remote_balance: Option<Value>,
+    #[serde(default)]
+    local_asset_balances: Option<Vec<FnnAssetBalance>>,
+    #[serde(default)]
+    remote_asset_balances: Option<Vec<FnnAssetBalance>>,
+    /// Legacy combined multi-asset balance blob from older FNN builds.
+    #[serde(default)]
+    #[allow(dead_code)]
+    asset_balances: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -49,7 +88,13 @@ pub struct PaymentResult {
 }
 
 #[async_trait]
-pub trait FiberNodeRpc {
+pub trait FiberNodeRpc: Send + Sync {
+    /// Dispatches a raw JSON-RPC payload to the underlying Fiber node.
+    async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String>;
+
+    /// Verifies if a specific HTLC payment hash has successfully settled on-chain.
+    async fn payment_is_success(&self, payment_hash: &str) -> Result<bool, String>;
+
     async fn list_channels(&self) -> Result<Vec<MeshChannelState>, String>;
     async fn node_pubkey(&self) -> Result<String, String>;
     async fn connect_peer(&self, peer_public_key: &str) -> Result<(), String>;
@@ -60,14 +105,72 @@ pub trait FiberNodeRpc {
         target_pubkey: &str,
         amount: u64,
     ) -> Result<PaymentResult, String>;
+
+    /// Queries RGB++ isomorphic cell capacity for a given type hash on CKB.
+    async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String>;
+
+    /// Maps a Bitcoin UTXO to its bound CKB cell via RGB++ isomorphic binding.
+    async fn map_bitcoin_utxo(&self, txid: &str, vout: u32) -> Result<BitcoinUtxoBinding, String>;
 }
 
+/// Bridges an `Arc<dyn FiberNodeRpc>` into the mutex-backed backend used by MFA control WS.
+pub struct ArcFnnBackend(pub Arc<dyn FiberNodeRpc + Send + Sync>);
+
+#[async_trait]
+impl FiberNodeRpc for ArcFnnBackend {
+    async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String> {
+        self.0.call_fnn_rpc(payload).await
+    }
+
+    async fn payment_is_success(&self, payment_hash: &str) -> Result<bool, String> {
+        self.0.payment_is_success(payment_hash).await
+    }
+
+    async fn list_channels(&self) -> Result<Vec<MeshChannelState>, String> {
+        self.0.list_channels().await
+    }
+
+    async fn node_pubkey(&self) -> Result<String, String> {
+        self.0.node_pubkey().await
+    }
+
+    async fn connect_peer(&self, peer_public_key: &str) -> Result<(), String> {
+        self.0.connect_peer(peer_public_key).await
+    }
+
+    async fn open_channel(&self, peer_public_key: &str, amount: u64) -> Result<(), String> {
+        self.0.open_channel(peer_public_key, amount).await
+    }
+
+    async fn close_channel(&self, peer_public_key: &str, force: bool) -> Result<(), String> {
+        self.0.close_channel(peer_public_key, force).await
+    }
+
+    async fn send_keysend_payment(
+        &self,
+        target_pubkey: &str,
+        amount: u64,
+    ) -> Result<PaymentResult, String> {
+        self.0.send_keysend_payment(target_pubkey, amount).await
+    }
+
+    async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
+        self.0.get_rgb_cell_capacity(cell_type_hash).await
+    }
+
+    async fn map_bitcoin_utxo(&self, txid: &str, vout: u32) -> Result<BitcoinUtxoBinding, String> {
+        self.0.map_bitcoin_utxo(txid, vout).await
+    }
+}
+
+#[derive(Clone)]
 pub struct LiveFnnClient {
     rpc_url: String,
     http_client: Client,
-    local_pubkey: RwLock<Option<String>>,
+    local_pubkey: Arc<RwLock<Option<String>>>,
 }
 
+#[derive(Clone)]
 pub struct SimulatedFnnClient {
     agent_id: u16,
     channels: Arc<RwLock<Vec<MeshChannelState>>>,
@@ -77,12 +180,15 @@ impl LiveFnnClient {
     pub fn new(rpc_url: String) -> Self {
         Self {
             rpc_url,
-            http_client: Client::new(),
-            local_pubkey: RwLock::new(None),
+            http_client: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("Failed to build FNN HTTP client"),
+            local_pubkey: Arc::new(RwLock::new(None)),
         }
     }
 
-    async fn call_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) async fn call_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
         let payload = RpcRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -114,6 +220,55 @@ impl LiveFnnClient {
         body.get("result")
             .cloned()
             .ok_or_else(|| format!("FNN RPC missing result field: {body}"))
+    }
+
+    /// Posts a raw JSON-RPC envelope (used by the mobile-money float bridge).
+    pub async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String> {
+        let response = self
+            .http_client
+            .post(&self.rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("FNN Network Timeout: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "FNN Node rejected connection: HTTP {}",
+                response.status()
+            ));
+        }
+
+        response
+            .json::<Value>()
+            .await
+            .map_err(|e| format!("FNN JSON parse error: {e}"))
+    }
+
+    /// Returns true when FNN reports the payment hash as successfully settled.
+    pub async fn payment_is_success(&self, payment_hash: &str) -> Result<bool, String> {
+        let trimmed = payment_hash.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "get_payment",
+            "params": { "payment_hash": trimmed },
+            "id": 1
+        });
+
+        let res = self.call_fnn_rpc(payload).await?;
+        if let Some(status) = res
+            .get("result")
+            .and_then(|r| r.get("status"))
+            .and_then(Value::as_str)
+        {
+            return Ok(status.eq_ignore_ascii_case("Success")
+                || status.eq_ignore_ascii_case("Settled"));
+        }
+        Ok(false)
     }
 
     pub(crate) fn channel_is_active(state: &Value) -> bool {
@@ -165,6 +320,46 @@ impl LiveFnnClient {
             .unwrap_or(0)
     }
 
+    fn parse_asset_capacity(entry: &FnnAssetBalance) -> Option<AssetCapacity> {
+        let asset_label = entry.asset.as_deref()?.trim();
+        if asset_label.is_empty() {
+            return None;
+        }
+        let asset = L2Asset::from_ledger_label(asset_label).ok()?;
+        let amount_atomic = Self::parse_balance_shannons(entry.amount.as_ref());
+        let mut cap = AssetCapacity::new(asset, amount_atomic);
+        cap.rwa_fraction_nanos = entry.fractional_nanos;
+        cap.rgb_cell_type_hash = entry.rgb_cell_type_hash.clone();
+        Some(cap)
+    }
+
+    fn parse_asset_balance_list(entries: Option<Vec<FnnAssetBalance>>) -> Vec<AssetCapacity> {
+        entries
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Self::parse_asset_capacity)
+            .collect()
+    }
+
+    fn merge_native_capacity(
+        mut capacities: Vec<AssetCapacity>,
+        native_amount: u64,
+        side: &str,
+    ) -> Vec<AssetCapacity> {
+        let _ = side;
+        if native_amount == 0 {
+            return capacities;
+        }
+        if capacities
+            .iter()
+            .any(|cap| cap.asset == L2Asset::CkbNative)
+        {
+            return capacities;
+        }
+        capacities.insert(0, AssetCapacity::new(L2Asset::CkbNative, native_amount));
+        capacities
+    }
+
     pub(crate) fn decode_list_channels(result: Value) -> Result<Vec<MeshChannelState>, String> {
         let parsed: ListChannelsRpcResult = serde_json::from_value(result)
             .map_err(|e| format!("Failed to decode list_channels result: {e}"))?;
@@ -174,6 +369,15 @@ impl LiveFnnClient {
             .into_iter()
             .map(|ch| {
                 let peer_id = Self::pubkey_to_peer_stub(&ch.pubkey);
+                let local_native = Self::parse_balance_shannons(ch.local_balance.as_ref());
+                let remote_native = Self::parse_balance_shannons(ch.remote_balance.as_ref());
+                let mut local_capacities = Self::parse_asset_balance_list(ch.local_asset_balances);
+                let mut remote_capacities = Self::parse_asset_balance_list(ch.remote_asset_balances);
+                local_capacities =
+                    Self::merge_native_capacity(local_capacities, local_native, "local");
+                remote_capacities =
+                    Self::merge_native_capacity(remote_capacities, remote_native, "remote");
+
                 MeshChannelState {
                     peer_id,
                     nonce: 1,
@@ -181,11 +385,50 @@ impl LiveFnnClient {
                     is_active: ch.enabled && Self::channel_is_active(&ch.state),
                     peer_pubkey: Some(ch.pubkey),
                     channel_id: ch.channel_id,
-                    local_balance_shannons: Self::parse_balance_shannons(ch.local_balance.as_ref()),
-                    remote_balance_shannons: Self::parse_balance_shannons(ch.remote_balance.as_ref()),
+                    local_balance_shannons: local_native,
+                    remote_balance_shannons: remote_native,
+                    local_capacities,
+                    remote_capacities,
                 }
             })
             .collect())
+    }
+
+    async fn query_rgb_cell_capacity(
+        &self,
+        cell_type_hash: &str,
+    ) -> Result<RgbCellCapacity, String> {
+        let hash = cell_type_hash.trim();
+        if hash.is_empty() || hash.len() > 128 {
+            return Err("cell_type_hash must be 1..=128 characters".to_string());
+        }
+        let result = self
+            .call_rpc(
+                "get_rgb_cell_capacity",
+                serde_json::json!([{ "cell_type_hash": hash }]),
+            )
+            .await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("decode get_rgb_cell_capacity: {e}"))
+    }
+
+    async fn query_bitcoin_utxo_binding(
+        &self,
+        txid: &str,
+        vout: u32,
+    ) -> Result<BitcoinUtxoBinding, String> {
+        let txid = txid.trim();
+        if txid.is_empty() || txid.len() > 128 {
+            return Err("txid must be 1..=128 characters".to_string());
+        }
+        let result = self
+            .call_rpc(
+                "map_bitcoin_utxo",
+                serde_json::json!([{ "txid": txid, "vout": vout }]),
+            )
+            .await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("decode map_bitcoin_utxo: {e}"))
     }
 }
 
@@ -213,6 +456,8 @@ impl SimulatedFnnClient {
                     channel_id: Some(format!("sim-channel-{agent_id}-{peer_id}")),
                     local_balance_shannons,
                     remote_balance_shannons,
+                    local_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, local_balance_shannons)],
+                    remote_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, remote_balance_shannons)],
                 }
             })
             .collect();
@@ -226,6 +471,67 @@ impl SimulatedFnnClient {
 
 #[async_trait]
 impl FiberNodeRpc for SimulatedFnnClient {
+    async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String> {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        let method = payload
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+
+        match method {
+            "send_payment" => {
+                log::info!(
+                    "🧪 [MOCK FNN] Simulating successful payment dispatch for FA-{}",
+                    self.agent_id
+                );
+                let mock_preimage = format!(
+                    "mock-preimage-{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                );
+                let mock_hash = format!(
+                    "0xmockhash{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                );
+
+                Ok(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "payment_hash": mock_hash,
+                        "preimage": mock_preimage,
+                        "status": "Settled"
+                    },
+                    "id": payload.get("id").unwrap_or(&serde_json::json!(1))
+                }))
+            }
+            "send_multi_hop_payment" => {
+                log::info!(
+                    "🧪 [MOCK FNN] Simulating multi-hop HTLC dispatch for FA-{}",
+                    self.agent_id
+                );
+                let mock_preimage = format!(
+                    "mock-mh-preimage-{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                );
+
+                Ok(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "payment_preimage": mock_preimage,
+                        "status": "SUCCESS",
+                        "failure_reason": null
+                    },
+                    "id": payload.get("id").unwrap_or(&serde_json::json!(1))
+                }))
+            }
+            _ => Ok(serde_json::json!({ "jsonrpc": "2.0", "result": {}, "id": 1 })),
+        }
+    }
+
+    async fn payment_is_success(&self, _payment_hash: &str) -> Result<bool, String> {
+        Ok(true)
+    }
+
     async fn list_channels(&self) -> Result<Vec<MeshChannelState>, String> {
         Ok(self.channels.read().await.clone())
     }
@@ -261,6 +567,8 @@ impl FiberNodeRpc for SimulatedFnnClient {
             channel_id: Some(format!("sim-channel-{}-{peer_id}", self.agent_id)),
             local_balance_shannons,
             remote_balance_shannons,
+            local_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, local_balance_shannons)],
+            remote_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, remote_balance_shannons)],
         });
         Ok(())
     }
@@ -327,10 +635,42 @@ impl FiberNodeRpc for SimulatedFnnClient {
             fee_shannons,
         })
     }
+
+    async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
+        let hash = cell_type_hash.trim();
+        if hash.is_empty() {
+            return Err("cell_type_hash required".to_string());
+        }
+        Ok(RgbCellCapacity {
+            cell_type_hash: hash.to_string(),
+            amount_atomic: 1_000_000,
+            fractional_nanos: Some(0),
+        })
+    }
+
+    async fn map_bitcoin_utxo(&self, txid: &str, vout: u32) -> Result<BitcoinUtxoBinding, String> {
+        let txid = txid.trim();
+        if txid.is_empty() {
+            return Err("txid required".to_string());
+        }
+        Ok(BitcoinUtxoBinding {
+            txid: txid.to_string(),
+            vout,
+            ckb_cell_id: Some(format!("sim-cell-{txid}-{vout}")),
+        })
+    }
 }
 
 #[async_trait]
 impl FiberNodeRpc for LiveFnnClient {
+    async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String> {
+        LiveFnnClient::call_fnn_rpc(self, payload).await
+    }
+
+    async fn payment_is_success(&self, payment_hash: &str) -> Result<bool, String> {
+        LiveFnnClient::payment_is_success(self, payment_hash).await
+    }
+
     async fn list_channels(&self) -> Result<Vec<MeshChannelState>, String> {
         let result = self
             .call_rpc(
@@ -462,6 +802,14 @@ impl FiberNodeRpc for LiveFnnClient {
             status: final_status,
             fee_shannons: final_fee,
         })
+    }
+
+    async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
+        LiveFnnClient::query_rgb_cell_capacity(self, cell_type_hash).await
+    }
+
+    async fn map_bitcoin_utxo(&self, txid: &str, vout: u32) -> Result<BitcoinUtxoBinding, String> {
+        LiveFnnClient::query_bitcoin_utxo_binding(self, txid, vout).await
     }
 }
 

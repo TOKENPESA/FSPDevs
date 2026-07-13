@@ -1,8 +1,67 @@
-//! Mesh keysend payments dispatched by MFA over the agent WebSocket.
+//! Mesh keysend and multi-hop HTLC payments dispatched by MFA over the agent WebSocket.
 
-use crate::fnn_client::FiberNodeRpc;
+use serde::{Deserialize, Serialize};
+
+use crate::fnn_client::{FiberNodeRpc, LiveFnnClient};
 use crate::storage::EdgeTxRecord;
 use crate::{AgentDb, ConfigUpdatePayload, PaymentResultPayload};
+use mesh_core::error::MeshError;
+
+#[derive(Serialize)]
+struct FnnMultiHopPaymentArgs {
+    peer_pubkey: String,
+    amount_shannons: u64,
+    payment_hash: String,
+    route_hops: Vec<String>,
+    cltv_expiry_delta: u32,
+}
+
+#[derive(Deserialize)]
+struct FnnPaymentResponse {
+    payment_preimage: Option<String>,
+    status: String,
+    failure_reason: Option<String>,
+}
+
+/// Forwards a compiled HTLC path to the native FNN upstream execution socket.
+pub async fn execute_fiber_multihop_payment(
+    fnn_client: &LiveFnnClient,
+    target_pubkey: &str,
+    amount: u64,
+    payment_hash: &str,
+    route_manifest: Vec<String>,
+) -> Result<String, MeshError> {
+    let payload = FnnMultiHopPaymentArgs {
+        peer_pubkey: target_pubkey.to_string(),
+        amount_shannons: amount,
+        payment_hash: payment_hash.to_string(),
+        route_hops: route_manifest,
+        cltv_expiry_delta: 40,
+    };
+
+    let params = serde_json::to_value(payload)
+        .map_err(|e| MeshError::PaymentError(format!("invalid multi-hop payload: {e}")))?;
+
+    let response: FnnPaymentResponse = fnn_client
+        .call_rpc("send_multi_hop_payment", params)
+        .await
+        .map_err(|e| MeshError::PaymentError(format!("FNN RPC Node Failed: {e}")))
+        .and_then(|value| {
+            serde_json::from_value(value)
+                .map_err(|e| MeshError::PaymentError(format!("FNN RPC decode failed: {e}")))
+        })?;
+
+    if response.status == "SUCCESS" {
+        Ok(response.payment_preimage.unwrap_or_default())
+    } else {
+        Err(MeshError::PaymentError(format!(
+            "HTLC Routing Failed: {}",
+            response
+                .failure_reason
+                .unwrap_or_else(|| "Unknown Execution Error".into())
+        )))
+    }
+}
 
 pub async fn execute_mesh_payment(
     fnn: &tokio::sync::Mutex<Box<dyn FiberNodeRpc + Send + Sync>>,

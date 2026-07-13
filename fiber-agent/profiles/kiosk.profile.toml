@@ -1,0 +1,12 @@
+# Mobile-money kiosk: float bridge only (no DICOBA).
+[sidecar]
+profile = "kiosk"
+
+[modules.dicoba]
+enabled = false
+
+[modules.fiat_bridge]
+enabled = true
+provider = "mpesa"
+msisdn = "255700000000"
+critical_fiat_floor = 50000.0

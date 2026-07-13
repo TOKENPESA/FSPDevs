@@ -18,13 +18,19 @@ import {
 import { meshPeerLinks } from "../topology.js";
 import { canvas } from "./layout.js";
 
-const ctx = canvas.getContext("2d");
+/** @typedef {import('../types.js').PathStyle} PathStyle */
+
+const _ctx = canvas.getContext("2d");
+if (!_ctx) throw new Error("2d canvas context unavailable");
+/** @type {CanvasRenderingContext2D} */
+const ctx = _ctx;
 
 const metricTick = document.getElementById("metric-tick");
 const metricLive = document.getElementById("metric-live");
 const metricDead = document.getElementById("metric-dead");
 const metricHeals = document.getElementById("metric-heals");
 
+/** @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2 @param {PathStyle} style @param {number} now @param {boolean} [dead] */
 function drawFlashLine(x1, y1, x2, y2, style, now, dead = false) {
   const pulse = dead ? 0.25 : 0.65 + 0.35 * Math.sin(now * 0.009 * state.speed);
   const offset = (now * style.speed * state.speed * 80) % 40;
@@ -55,16 +61,18 @@ function drawFlashLine(x1, y1, x2, y2, style, now, dead = false) {
   ctx.restore();
 }
 
+/** @param {number} now */
 function drawHoveredPaths(now) {
   const id = state.hoveredNode;
   if (!id) return;
 
   for (const { peer, kind } of meshPeerLinks(id)) {
     const dead = state.dead.has(id) || state.dead.has(peer);
+    const pathKind = /** @type {keyof typeof PATH_STYLES} */ (kind);
     drawFlashLine(
       nodeX[id], nodeY[id],
       nodeX[peer], nodeY[peer],
-      PATH_STYLES[kind], now, dead,
+      PATH_STYLES[pathKind], now, dead,
     );
   }
 
@@ -89,14 +97,16 @@ function drawHoveredPaths(now) {
   ctx.restore();
 }
 
+/** @param {number} a @param {number} b */
 function linkActive(a, b) {
   return !state.dead.has(a) && !state.dead.has(b);
 }
 
+/** @param {Array<[number, number]>} edges @param {{ color: string, width: number, alpha?: number, hover?: string }} style @param {number} now @param {Set<number> | null} [highlightSet] */
 function drawMeshLayer(edges, style, now, highlightSet) {
   ctx.lineWidth = style.width;
   ctx.strokeStyle = style.color;
-  ctx.globalAlpha = style.alpha;
+  ctx.globalAlpha = style.alpha ?? 1;
   ctx.beginPath();
   for (const [a, b] of edges) {
     if (!linkActive(a, b)) continue;
@@ -107,7 +117,7 @@ function drawMeshLayer(edges, style, now, highlightSet) {
   ctx.stroke();
 
   if (highlightSet) {
-    ctx.strokeStyle = style.hover;
+    ctx.strokeStyle = style.hover ?? style.color;
     ctx.globalAlpha = 0.95;
     ctx.beginPath();
     for (const [a, b] of edges) {
@@ -121,6 +131,7 @@ function drawMeshLayer(edges, style, now, highlightSet) {
   ctx.globalAlpha = 1;
 }
 
+/** @param {number} now */
 export function drawCommLinks(now) {
   const t = Date.now();
   pruneComm(t);
@@ -129,7 +140,7 @@ export function drawCommLinks(now) {
     if (t - meta.at > COMM_TTL_MS) continue;
     const { a, b } = meta;
     if (state.dead.has(a) || state.dead.has(b)) continue;
-    const style = COMM_STYLE[meta.kind] ?? COMM_STYLE.mesh;
+    const style = (COMM_STYLE[/** @type {keyof typeof COMM_STYLE} */ (meta.kind)] ?? COMM_STYLE.mesh);
     const fade = 1 - (t - meta.at) / COMM_TTL_MS;
     ctx.save();
     ctx.globalAlpha = 0.35 + 0.65 * fade;
@@ -164,6 +175,7 @@ export function drawCommLinks(now) {
   }
 }
 
+/** @param {number} x @param {number} y @param {number} radius @param {string} color @param {number} alpha @param {number} [glow] */
 function drawGlowDot(x, y, radius, color, alpha, glow = 8) {
   ctx.globalAlpha = alpha * 0.3;
   ctx.fillStyle = color;
@@ -176,6 +188,7 @@ function drawGlowDot(x, y, radius, color, alpha, glow = 8) {
   ctx.fill();
 }
 
+/** @param {number} now */
 export function drawActiveRoute(now) {
   const pt = state.paymentTransfer;
   const path = pt?.path ?? state.activeRoute;
@@ -240,6 +253,7 @@ export function drawActiveRoute(now) {
   ctx.restore();
 }
 
+/** @param {number} now */
 export function drawConstellation(now) {
   ctx.fillStyle = "#060a12";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -372,10 +386,10 @@ export function drawConstellation(now) {
     drawGlowDot(nodeX[id], nodeY[id], radius, color, alpha, isHovered ? 12 : 6);
   }
 
-  metricTick.textContent = String(state.tick);
-  metricLive.textContent = String(state.comm.nodes.size);
-  metricDead.textContent = String(state.dead.size);
-  metricHeals.textContent = String(state.healCount);
+  if (metricTick) metricTick.textContent = String(state.tick);
+  if (metricLive) metricLive.textContent = String(state.comm.nodes.size);
+  if (metricDead) metricDead.textContent = String(state.dead.size);
+  if (metricHeals) metricHeals.textContent = String(state.healCount);
   state.dirty = false;
 }
 

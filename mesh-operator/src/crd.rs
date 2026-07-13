@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Custom Resource specification tracking desired states for the Fiber Agent network grid
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, JsonSchema)]
 #[kube(
-    group = "tpxdevs.infra",
+    group = "fspdevs.infra",
     version = "v1alpha1",
     kind = "MeshFleet",
     plural = "meshfleets",

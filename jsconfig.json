@@ -1,0 +1,28 @@
+﻿{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "dashboard/**/*.js",
+    "mfa-console/**/*.js",
+    "fiber-agent/src-tauri/frontend/**/*.js",
+    "packages/**/*.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "gemin audit/**",
+    "gemini audit2/**",
+    "Fiber Readiness/**",
+    "FSPDevs-gemini-audit-10/**"
+  ]
+}

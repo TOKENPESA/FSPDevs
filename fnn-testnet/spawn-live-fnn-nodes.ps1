@@ -1,4 +1,4 @@
-# Start real fnn.exe processes for a range of FA nodes (use with MESH_FNN_AUTO_PORTS sidecars or live fleet).
+﻿# Start real fnn.exe processes for a range of FA nodes (use with MESH_FNN_AUTO_PORTS sidecars or live fleet).
 param(
     [int]$From = 1,
     [int]$To = 16,
@@ -15,7 +15,7 @@ if ($From -lt 1 -or $To -gt 1024 -or $From -gt $To) {
     Write-Error "From/To must be 1..1024 with From <= To"
 }
 
-$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "tpxdevs-local" }
+$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "fspdevs-local" }
 $pidFile = Join-Path $root "nodes\mesh-fnn.pids"
 New-Item -ItemType Directory -Path (Join-Path $root "nodes") -Force | Out-Null
 @() | Set-Content $pidFile

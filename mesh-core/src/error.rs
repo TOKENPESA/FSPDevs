@@ -6,6 +6,10 @@ pub enum MeshError {
     AgentIdOutOfRange(u16),
     #[error("invalid secret key: {0}")]
     InvalidSecretKey(String),
+    #[error("invalid identity key: {0}")]
+    InvalidKey(String),
+    #[error("cryptographic error: {0}")]
+    CryptoError(String),
     #[error("secret key hex decode failed: {0}")]
     SecretKeyHexDecode(String),
     #[error("FIBER_AGENT_SECRET_KEY_HEX must be 32 bytes, got {0}")]
@@ -16,6 +20,14 @@ pub enum MeshError {
     InvalidPayload(String),
     #[error("network error: {0}")]
     NetworkError(String),
+    #[error("hub not found: {0}")]
+    HubNotFound(String),
+    #[error("insufficient hub float for intent swap")]
+    InsufficientFloat,
+    #[error("storage error: {0}")]
+    StorageError(String),
+    #[error("payment error: {0}")]
+    PaymentError(String),
 }
 
 use crate::constants::RING_SIZE;

@@ -1,10 +1,10 @@
-# Start a live (non-simulated) Fiber Agent sidecar for dashboard payments.
+﻿# Start a live (non-simulated) Fiber Agent sidecar for dashboard payments.
 param(
     [Parameter(Mandatory = $true)]
     [int]$AgentId,
     [string]$MfaHost = "127.0.0.1:1025",
     [string]$FnnRpcUrl = "http://127.0.0.1:8227",
-    [string]$WsToken = "tpxdevs-local-ws"
+    [string]$WsToken = "fspdevs-local-ws"
 )
 
 $ErrorActionPreference = "Stop"

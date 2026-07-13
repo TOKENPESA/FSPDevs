@@ -1,7 +1,8 @@
-import { state, nodeX, nodeY } from "./state.js";
-import { gridDim } from "./topology.js";
+import { nodeX, nodeY, state } from "../state.js";
+import { gridDim } from "../topology.js";
+import { requireCanvas } from "../dom.js";
 
-const canvas = document.getElementById("grid");
+const canvas = requireCanvas("grid");
 
 export function layoutNodes() {
   const pad = 36;
@@ -24,6 +25,7 @@ export function layoutNodes() {
   }
 }
 
+/** @param {number} x @param {number} y @returns {number | null} */
 export function nodeAt(x, y) {
   const pad = 36;
   const w = canvas.width - pad * 2;

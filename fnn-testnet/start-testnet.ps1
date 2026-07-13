@@ -1,4 +1,4 @@
-# Start FNN testnet node (v0.8.1 release binary)
+﻿# Start FNN testnet node (v0.8.1 release binary)
 param(
     [switch]$Restart
 )
@@ -10,7 +10,7 @@ $fnn = Join-Path $root "fnn.exe"
 $config = Join-Path $data "config.yml"
 
 if (-not (Test-Path $fnn)) {
-    Write-Error "fnn.exe not found. Run setup from TPXDevs/fnn-testnet release bundle first."
+    Write-Error "fnn.exe not found. Run setup from FSPDevs/fnn-testnet release bundle first."
 }
 
 $existing = Get-Process -Name "fnn" -ErrorAction SilentlyContinue
@@ -34,7 +34,7 @@ if (-not (Test-Path $config)) {
 
 & (Join-Path $root "setup-testnet-key.ps1")
 
-$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "tpxdevs-local" }
+$env:FIBER_SECRET_KEY_PASSWORD = if ($env:FIBER_SECRET_KEY_PASSWORD) { $env:FIBER_SECRET_KEY_PASSWORD } else { "fspdevs-local" }
 $env:RUST_LOG = if ($env:RUST_LOG) { $env:RUST_LOG } else { "info" }
 
 Write-Host "Starting FNN testnet..."

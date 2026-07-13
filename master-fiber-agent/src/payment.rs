@@ -8,8 +8,9 @@ use mesh_core::MeshError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
+use tokio::time::{timeout, Duration};
 use uuid::Uuid;
 
 // ================================================================================
@@ -70,6 +71,12 @@ pub struct PaymentEngineState {
     pub active_payments: Arc<RwLock<HashMap<Uuid, ActivePaymentTracker>>>,
 }
 
+impl Default for PaymentEngineState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PaymentEngineState {
     pub fn new() -> Self {
         Self {
@@ -89,9 +96,10 @@ fn calculate_backwards_hop_liquidity(
 
     for &node in path.iter().rev() {
         amount_map.insert(node, current_required);
-        let hop_fee = fee_base_shannons
-            + (current_required.saturating_mul(fee_proportional_millionths)) / 1_000_000;
-        current_required = current_required.saturating_add(hop_fee);
+        let hop_liquidity_premium =
+            (current_required.saturating_mul(fee_proportional_millionths)) / 1_000_000;
+        let total_fee_shannons = fee_base_shannons.saturating_add(hop_liquidity_premium);
+        current_required = current_required.saturating_add(total_fee_shannons);
     }
     amount_map
 }
@@ -108,7 +116,7 @@ pub async fn dispatch_multi_hop_payment(
     }
 
     let payment_id = Uuid::new_v4();
-    let mock_hash = format!("hash-{payment_id}-tpx");
+    let mock_hash = format!("hash-{payment_id}-fsp");
 
     let amount_map = calculate_backwards_hop_liquidity(&req.path, req.amount_shannons, 1000, 10);
 
@@ -129,13 +137,24 @@ pub async fn dispatch_multi_hop_payment(
 
     let source_node = req.path[0];
     match trigger_next_hop_execution(payment_id, source_node, engine_state, peers).await {
-        Ok(()) => match rx.await {
-            Ok(result) => result,
-            Err(_) => {
+        Ok(()) => match timeout(
+            Duration::from_secs(PAYMENT_EXEC_TIMEOUT_SECS),
+            rx,
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
                 engine_state.active_payments.write().await.remove(&payment_id);
                 Err(MeshError::NetworkError(
                     "Payment pipeline broken. Node disconnected mid-route.".to_string(),
                 ))
+            }
+            Err(_) => {
+                engine_state.active_payments.write().await.remove(&payment_id);
+                Err(MeshError::NetworkError(format!(
+                    "timed out after {PAYMENT_EXEC_TIMEOUT_SECS}s waiting for multi-hop settlement"
+                )))
             }
         },
         Err(err) => {
@@ -305,31 +324,19 @@ async fn dispatch_multi_hop_route_payment(
         path: path.to_vec(),
     };
 
-    let payment_result = match tokio::time::timeout(
-        Duration::from_secs(PAYMENT_EXEC_TIMEOUT_SECS),
-        dispatch_multi_hop_payment(req, &state.payment_engine, &state.peers),
-    )
-    .await
+    let payment_result = match dispatch_multi_hop_payment(req, &state.payment_engine, &state.peers).await
     {
-        Ok(Ok(preimage)) => PaymentExecResult {
+        Ok(preimage) => PaymentExecResult {
             success: true,
             payment_hash: Some(preimage),
             fee_shannons: None,
             error: None,
         },
-        Ok(Err(err)) => PaymentExecResult {
+        Err(err) => PaymentExecResult {
             success: false,
             payment_hash: None,
             fee_shannons: None,
             error: Some(err.to_string()),
-        },
-        Err(_) => PaymentExecResult {
-            success: false,
-            payment_hash: None,
-            fee_shannons: None,
-            error: Some(format!(
-                "timed out after {PAYMENT_EXEC_TIMEOUT_SECS}s waiting for multi-hop settlement"
-            )),
         },
     };
 
@@ -449,27 +456,33 @@ async fn dispatch_single_hop_payment(
         .to_string(),
     );
 
-    let payment_result = match tokio::time::timeout(
+    let payment_result = match timeout(
         Duration::from_secs(PAYMENT_EXEC_TIMEOUT_SECS),
         rx,
     )
     .await
     {
         Ok(Ok(result)) => result,
-        Ok(Err(_)) => PaymentExecResult {
-            success: false,
-            payment_hash: None,
-            fee_shannons: None,
-            error: Some("payment waiter cancelled".into()),
-        },
-        Err(_) => PaymentExecResult {
-            success: false,
-            payment_hash: None,
-            fee_shannons: None,
-            error: Some(format!(
-                "timed out after {PAYMENT_EXEC_TIMEOUT_SECS}s waiting for FA-{source} payment result"
-            )),
-        },
+        Ok(Err(_)) => {
+            state.payment_waiters.write().await.remove(&payment_id);
+            PaymentExecResult {
+                success: false,
+                payment_hash: None,
+                fee_shannons: None,
+                error: Some("payment waiter cancelled — agent disconnected".into()),
+            }
+        }
+        Err(_) => {
+            state.payment_waiters.write().await.remove(&payment_id);
+            PaymentExecResult {
+                success: false,
+                payment_hash: None,
+                fee_shannons: None,
+                error: Some(format!(
+                    "timed out after {PAYMENT_EXEC_TIMEOUT_SECS}s waiting for FA-{source} payment result"
+                )),
+            }
+        }
     };
 
     finalize_route_payment_response(

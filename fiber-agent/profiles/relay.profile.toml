@@ -1,0 +1,9 @@
+# Mesh relay: no FSP modules mounted.
+[sidecar]
+profile = "relay"
+
+[modules.dicoba]
+enabled = false
+
+[modules.fiat_bridge]
+enabled = false

@@ -1,5 +1,5 @@
-================================================================================
-TPXDevs — SIMULATION BASE (current state · v4.3 · June 2026)
+﻿================================================================================
+FSPDevs — SIMULATION BASE (current state · v4.3 · June 2026)
 ================================================================================
 
 This document is the canonical reference for what the local mesh simulation
@@ -68,7 +68,7 @@ Data flows:
 REPO LAYOUT
 ================================================================================
 
-TPXDevs/
+fspdevs/
 ├── master-fiber-agent/     MFA supervisor (Rust/Axum)
 ├── fiber-agent/            Native sidecar crate (fiber_agent_sidecar)
 │   ├── src/main.rs         fiber-agent-daemon binary
@@ -131,7 +131,7 @@ ENVIRONMENT VARIABLES
 | FNN_MODE=simulate          | Sidecar   | (off) use live RPC   |
 | FNN_OPEN_CHANNEL_SHANNONS  | Sidecar   | 10000000000          |
 | AGENT_ID                   | Sidecar   | 44                   |
-| FIBER_SECRET_KEY_PASSWORD  | FNN       | tpxdevs-local        |
+| FIBER_SECRET_KEY_PASSWORD  | FNN       | fspdevs-local        |
 | RUST_LOG                   | FNN/MFA   | info                 |
 
 ================================================================================

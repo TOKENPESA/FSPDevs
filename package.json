@@ -1,5 +1,5 @@
 {
-  "name": "@tpxdevs/fiber-dashboard",
+  "name": "@fspdevs/fiber-dashboard",
   "version": "1.0.0",
   "description": "Best-in-class embeddable web canvas component for Fiber Network mesh orchestration and monitoring",
   "main": "./dashboard/main.js",
@@ -11,12 +11,21 @@
   },
   "files": [
     "dashboard/",
-    "index.html"
+    "mfa-console/",
+    "index.html",
+    "index-legacy.html",
+    "regulatory-audit.html"
   ],
   "scripts": {
     "serve:dashboard": "npx --yes serve . -p 8088 --no-port-switching",
+    "serve:mfa": "npx --yes serve . -p 8088 --no-port-switching",
     "dashboard": "powershell -ExecutionPolicy Bypass -File fnn-testnet/start-dashboard.ps1",
-    "mesh:fleet": "powershell -ExecutionPolicy Bypass -File fnn-testnet/spawn-mesh-fleet.ps1"
+    "sync:mfa-css": "node scripts/sync-mfa-css.mjs",
+    "sync:sidecar-ui": "node scripts/sync-sidecar-ui.mjs",
+    "integrity": "node scripts/integrity.mjs",
+    "typecheck": "npx --yes -p typescript@5.7.3 tsc -p jsconfig.json --noEmit",
+    "console:dev": "npm run dev --prefix fsp-console",
+    "console:build": "npm run build --prefix fsp-console"
   },
   "dependencies": {},
   "publishConfig": {

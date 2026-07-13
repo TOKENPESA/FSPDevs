@@ -1,4 +1,4 @@
-# One-shot checklist for live testnet dashboard payments (prints steps; does not start long-running processes).
+﻿# One-shot checklist for live testnet dashboard payments (prints steps; does not start long-running processes).
 param(
     [int]$SourceAgent = 44,
     [int]$DestAgent = 45,
@@ -45,7 +45,7 @@ Write-Host @"
 
   Env (already set by scripts above):
     MESH_PUBKEY_REGISTRY_PATH = $root\mesh-pubkeys.json
-    MFA_AGENT_WS_TOKEN        = tpxdevs-local-ws
+    MFA_AGENT_WS_TOKEN        = fspdevs-local-ws
     FNN_RPC_URL               = http://127.0.0.1:8227
 
 ================================================================================

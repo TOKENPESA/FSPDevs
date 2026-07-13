@@ -40,22 +40,30 @@ mod tests {
     use tokio::sync::{mpsc, RwLock};
 
     fn mock_state() -> Arc<AppState> {
+        let (plugin_registry, module_store, plugin_hot_reloader) =
+            crate::test_support::test_plugin_stack(1_000_000);
         let (tx, _) = mpsc::channel(4);
         let (ui_broadcast, _) = broadcast::channel(4);
+        let (compliance_broadcast, _) = broadcast::channel(4);
         Arc::new(AppState {
             tx_queue: tx,
             peers: Arc::new(RwLock::new(HashMap::new())),
             graph: Arc::new(RwLock::new(crate::graph::CompleteMeshGraph::new())),
             ui_broadcast,
+            compliance_broadcast,
+            compliance_tickets: crate::auth::EphemeralTicketRegistry::new(
+                crate::auth::EPHEMERAL_TICKET_TTL_SECS,
+            ),
             alert_dedupe: RwLock::new(HashSet::new()),
             alert_order: RwLock::new(VecDeque::new()),
-            active_funding_locks: RwLock::new(crate::workers::background::FundingLockManager::new(60)),
+            active_funding_locks: RwLock::new(crate::workers::background::ExpiringLockManager::new(60)),
             hub_config: crate::state::HubConfig {
                 rpc_url: "http://127.0.0.1:8227".to_string(),
                 funding_allocation_shannons: 1_000_000,
             },
             multi_hub_registry: RwLock::new(crate::hub::MultiHubRegistry::new()),
             agent_ws_token: "test".to_string(),
+            api_token: "test-api-token-123456".to_string(),
             agent_fnn_pubkeys: RwLock::new(HashMap::new()),
             mesh_pubkey_registry: mesh_core::MeshPubkeyRegistry::from_map(HashMap::new()),
             payment_waiters: Arc::new(RwLock::new(HashMap::new())),
@@ -64,6 +72,14 @@ mod tests {
             ws_allowed_origins: vec![],
             agent_liquidity_snap: RwLock::new(HashMap::new()),
             liquidity_copilot: RwLock::new(crate::workers::background::LiquidityCopilot::new()),
+            asset_registry: mesh_core::AssetRegistryHub::new(),
+            papss_gateway: None,
+            enterprise_clearinghouse: crate::clearinghouse::mock_enterprise_clearinghouse(),
+            regional_clearing: Arc::new(crate::clearing::RegionalClearinghouseEngine::new()),
+            edge_hardware_profiles: Arc::new(RwLock::new(HashMap::new())),
+            plugin_registry,
+            module_store,
+            plugin_hot_reloader,
         })
     }
 

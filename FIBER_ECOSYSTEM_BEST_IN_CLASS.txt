@@ -1,9 +1,9 @@
-================================================================================
-TPXDevs — FIBER ECOSYSTEM BEST-IN-CLASS BENCHMARK (v5 · June 2026)
+﻿================================================================================
+FSPDevs — FIBER ECOSYSTEM BEST-IN-CLASS BENCHMARK (v5 · June 2026)
 ================================================================================
 
 Purpose: Seed document for Gemini deep audit. Defines what "best in the Fiber
-Network ecosystem" means and where TPXDevs stands today vs target state.
+Network ecosystem" means and where FSPDevs stands today vs target state.
 
 Reference ecosystem:
   • https://www.fiber.world — official Fiber Network testnet
@@ -39,7 +39,7 @@ It is the operational layer the ecosystem lacks today:
      Same APIs and dashboards against sim, local FNN, fiber.world peers.
 
 ================================================================================
-TPXDevs CURRENT POSITION (v5 post-refactor)
+FSPDevs CURRENT POSITION (v5 post-refactor)
 ================================================================================
 
 STRENGTHS (differentiators today):
@@ -127,7 +127,7 @@ KILLER FEATURE CANDIDATES (implementation anchors)
      pre-emptive hub funding before ALERT_BALANCE_DEPLETED.
 
   5. FIBER OPS DASHBOARD STANDARD
-     Export dashboard/ as embeddable @tpxdevs/fiber-dashboard npm package;
+     Export dashboard/ as embeddable @fspdevs/fiber-dashboard npm package;
      MFA /ws/monitor as stable event schema versioned in mesh-core/types.rs.
 
 ================================================================================

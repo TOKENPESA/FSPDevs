@@ -17,7 +17,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://esm.sh 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://esm.sh; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ipc: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://esm.sh https://cdn.jsdelivr.net https://testnet.ckbapp.dev https://mainnet.ckbapp.dev https://api.joyid.dev https://*.joyid.dev wss://api.joyid.dev; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'self' blob:"
+      "csp": "default-src 'self'; script-src 'self' https://esm.sh 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://esm.sh; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ipc: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://mfa.fsprotocol.com https://*.fsprotocol.com wss://mfa.fsprotocol.com wss://*.fsprotocol.com https://esm.sh https://cdn.jsdelivr.net https://testnet.ckbapp.dev https://mainnet.ckbapp.dev https://api.joyid.dev https://*.joyid.dev wss://api.joyid.dev; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'self' blob:"
     }
   },
   "bundle": {

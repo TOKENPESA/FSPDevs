@@ -12,4 +12,4 @@ msisdn = "255711111111"
 critical_fiat_floor = 50000.0
 
 [network]
-mfa_host = "127.0.0.1:1025"
+mfa_host = "mfa.fsprotocol.com"

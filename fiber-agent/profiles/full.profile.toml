@@ -24,4 +24,4 @@ enabled = true
 enabled = true
 
 [network]
-mfa_host = "127.0.0.1:1025"
+mfa_host = "mfa.fsprotocol.com"

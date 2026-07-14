@@ -52,8 +52,11 @@ pub struct SidecarConfig {
 
 impl SidecarConfig {
     pub fn from_env() -> Self {
+        crate::mfa_ws_auth::apply_secure_mfa_env_defaults();
         Self {
-            mfa_host: std::env::var("MFA_HOST").unwrap_or_else(|_| "127.0.0.1:1025".to_string()),
+            mfa_host: std::env::var("MFA_HOST").unwrap_or_else(|_| {
+                crate::mfa_ws_auth::DEFAULT_MFA_HOST.to_string()
+            }),
             ws_token: std::env::var("MFA_AGENT_WS_TOKEN")
                 .unwrap_or_else(|_| "fspdevs-local-ws".into()),
             force_simulate_fnn: std::env::var("FNN_MODE")

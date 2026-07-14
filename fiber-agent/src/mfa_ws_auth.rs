@@ -12,6 +12,31 @@ pub const AGENT_AUTH_HEADER: &str = "X-MFA-Agent-Auth";
 pub const AGENT_ID_HEADER: &str = "X-Agent-ID";
 pub const AGENT_TIMESTAMP_HEADER: &str = "X-MFA-Timestamp";
 
+/// Live testnet MFA host (TLS). Sidecars/mobile default here to avoid cleartext blocks.
+pub const DEFAULT_MFA_HOST: &str = "mfa.fsprotocol.com";
+
+/// Apply production MFA endpoint defaults when env vars are unset.
+/// Safe for Android/iOS (no cleartext HTTP to the control plane).
+pub fn apply_secure_mfa_env_defaults() {
+    if std::env::var("MFA_HOST").is_err() {
+        std::env::set_var("MFA_HOST", DEFAULT_MFA_HOST);
+    }
+    if std::env::var("MFA_WS_SECURE").is_err() {
+        std::env::set_var("MFA_WS_SECURE", "true");
+    }
+}
+
+fn mfa_ws_secure_enabled() -> bool {
+    match std::env::var("MFA_WS_SECURE") {
+        Ok(raw) => {
+            let v = raw.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+        }
+        // Default secure so unschemed hosts use https/wss (Android cleartext policy).
+        Err(_) => true,
+    }
+}
+
 /// Builds the HMAC-SHA256 hex token MFA verifies in `X-MFA-Agent-Auth`.
 pub fn sign_agent_handshake_token(
     agent_id: u16,
@@ -82,9 +107,7 @@ fn resolve_mfa_host_parts(mfa_host: &str) -> (&'static str, &str) {
     } else if let Some(rest) = host.strip_prefix("http://") {
         ("http", rest)
     } else {
-        let secure = std::env::var("MFA_WS_SECURE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let secure = mfa_ws_secure_enabled();
         (if secure { "https" } else { "http" }, host)
     }
 }
@@ -103,9 +126,18 @@ mod tests {
 
     #[test]
     fn control_ws_url_never_embeds_token() {
-        let url = mfa_control_ws_url(44, "167.99.150.153");
+        let url = mfa_control_ws_url(44, "http://167.99.150.153");
         assert_eq!(url, "ws://167.99.150.153/ws/44");
         assert!(!url.contains("token="));
+    }
+
+    #[test]
+    fn control_ws_url_defaults_unschemed_host_to_wss() {
+        std::env::set_var("MFA_WS_SECURE", "true");
+        assert_eq!(
+            mfa_control_ws_url(1, "mfa.fsprotocol.com"),
+            "wss://mfa.fsprotocol.com/ws/1"
+        );
     }
 
     #[test]

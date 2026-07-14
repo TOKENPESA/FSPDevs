@@ -47,6 +47,9 @@ async fn initialize_sidecar_host(agent_id: u16) -> Result<fiber_agent::SidecarHo
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Lock desktop/mobile sidecars to the TLS MFA control plane (Android cleartext policy).
+    fiber_agent::mfa_ws_auth::apply_secure_mfa_env_defaults();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {

@@ -39,7 +39,7 @@ function mfaStatusHint(snapshot) {
 
   }
 
-  return `Unreachable · ${snapshot.mfaHost ?? "127.0.0.1:1025"}`;
+  return `Unreachable · ${snapshot.mfaHost ?? "mfa.fsprotocol.com"}`;
 
 }
 

@@ -22,16 +22,21 @@ export function isPublicMfaHostname(hostname = isBrowser() ? window.location.hos
 
 /**
  * Resolve MFA HTTP base for the current page.
- * - Local dashboard (:8088 / loopback) → MFA on :1025
+ * - Tauri desktop/mobile shell → live TLS MFA (Android cleartext policy)
  * - Production console (same host as nginx) → same origin (HTTPS)
+ * - Local browser dashboard on loopback → MFA on :1025
  */
 function resolveMfaHttpBase() {
   if (!isBrowser()) {
-    return "http://127.0.0.1:1025";
+    return "https://mfa.fsprotocol.com";
+  }
+  // Tauri webview (file://, tauri.localhost, custom protocol) → secure MFA
+  if (typeof window.__TAURI__ !== "undefined") {
+    return "https://mfa.fsprotocol.com";
   }
   const { protocol, hostname, origin } = window.location;
-  if (protocol === "file:") {
-    return "http://127.0.0.1:1025";
+  if (protocol === "file:" || hostname === "tauri.localhost") {
+    return "https://mfa.fsprotocol.com";
   }
   if (isPublicMfaHostname(hostname)) {
     return origin;
@@ -131,7 +136,7 @@ export function mfaDisplayHost() {
   try {
     return new URL(MFA_API_BASE_URL).host;
   } catch {
-    return "127.0.0.1:1025";
+    return "mfa.fsprotocol.com";
   }
 }
 

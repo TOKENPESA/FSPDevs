@@ -4,6 +4,8 @@ use mesh_core::types::FloatExhaustionTelemetry;
 use reqwest::header::{HeaderMap, AUTHORIZATION};
 use serde_json::Value;
 
+use crate::mfa_ws_auth::{self, apply_secure_mfa_env_defaults, DEFAULT_MFA_HOST};
+
 pub const DEFAULT_MFA_API_TOKEN: &str = "fspdevs-local-api-devonly";
 
 pub fn resolve_mfa_api_token() -> Option<String> {
@@ -30,29 +32,32 @@ pub fn mfa_auth_headers() -> HeaderMap {
 }
 
 pub fn resolve_mfa_host() -> String {
-    std::env::var("MFA_HOST").unwrap_or_else(|_| "127.0.0.1:1025".to_string())
+    apply_secure_mfa_env_defaults();
+    std::env::var("MFA_HOST").unwrap_or_else(|_| DEFAULT_MFA_HOST.to_string())
 }
 
 pub fn normalize_mfa_host(host: &str) -> String {
     host.trim()
         .trim_start_matches("https://")
         .trim_start_matches("http://")
+        .trim_start_matches("wss://")
+        .trim_start_matches("ws://")
         .trim_end_matches('/')
         .to_string()
 }
 
 pub fn mfa_health_url(mfa_host: Option<&str>) -> String {
     let host = mfa_host
-        .map(normalize_mfa_host)
+        .map(|h| h.to_string())
         .unwrap_or_else(resolve_mfa_host);
-    format!("http://{host}/")
+    format!("{}/", mfa_ws_auth::mfa_http_base(&host))
 }
 
 pub fn mfa_control_ws_url(agent_id: u16, mfa_host: Option<&str>) -> String {
     let host = mfa_host
-        .map(normalize_mfa_host)
+        .map(|h| h.to_string())
         .unwrap_or_else(resolve_mfa_host);
-    crate::mfa_ws_auth::mfa_control_ws_url(agent_id, &host)
+    mfa_ws_auth::mfa_control_ws_url(agent_id, &host)
 }
 
 pub fn format_mfa_service_name(raw: &str) -> String {
@@ -98,10 +103,13 @@ pub async fn probe_mfa_health(mfa_host: Option<&str>) -> Result<Value, String> {
 
 pub fn mfa_clearing_url(mfa_host: Option<&str>) -> String {
     let host = mfa_host
-        .map(normalize_mfa_host)
-        .or_else(|| std::env::var("MFA_HOST").ok().map(|value| normalize_mfa_host(&value)))
+        .map(|h| h.to_string())
+        .or_else(|| std::env::var("MFA_HOST").ok())
         .unwrap_or_else(resolve_mfa_host);
-    format!("http://{host}/clearing/float-crisis")
+    format!(
+        "{}/clearing/float-crisis",
+        mfa_ws_auth::mfa_http_base(&host)
+    )
 }
 
 pub async fn post_float_crisis_to_mfa(
@@ -151,7 +159,7 @@ mod tests {
     #[test]
     fn mfa_control_ws_url_uses_agent_route() {
         std::env::set_var("MFA_HOST", "127.0.0.1:1025");
-        std::env::remove_var("MFA_WS_SECURE");
+        std::env::set_var("MFA_WS_SECURE", "false");
         assert_eq!(
             mfa_control_ws_url(7, None),
             "ws://127.0.0.1:1025/ws/7"

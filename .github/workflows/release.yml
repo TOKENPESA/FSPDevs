@@ -1,0 +1,136 @@
+# Cross-platform Tauri 2 desktop releases for the Fiber Agent sidecar.
+# Triggers on version tags (e.g. v1.0.0) and produces a draft GitHub Release
+# with Windows / macOS / Linux installers.
+
+name: "Build Desktop Assets"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create/attach (e.g. v1.0.1)"
+        required: true
+        type: string
+
+jobs:
+  build-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rust_targets: aarch64-apple-darwin
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            rust_targets: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+          - platform: windows-latest
+            args: ""
+            rust_targets: ""
+
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: fiber-agent
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release_meta
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9] ]]; then
+            echo "Release tag must look like v1.0.0 (got: $TAG)" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: fiber-agent/package.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            fiber-agent/src-tauri -> fiber-agent/src-tauri/target
+            fiber-agent -> fiber-agent/target
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Install frontend / CLI dependencies
+        run: |
+          npm install
+          npm install --prefix src-tauri/frontend
+          npm run sync:sidecar-ui
+
+      - name: Ensure multi-platform icons
+        # Repo ships Windows .ico; generate PNG/ICNS for macOS/Linux bundles.
+        run: |
+          python3 -m pip install --user pillow
+          python3 <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          icons = Path("src-tauri/icons")
+          ico = icons / "icon.ico"
+          png = icons / "app-icon.png"
+          img = Image.open(ico).convert("RGBA").resize((1024, 1024))
+          img.save(png)
+          print(f"wrote {png}")
+          PY
+          npx --yes @tauri-apps/cli@2 icon src-tauri/icons/app-icon.png
+
+      - name: Build and release Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MFA_HOST: mfa.fsprotocol.com
+          MFA_WS_SECURE: "true"
+          MFA_AUTO_REGISTER: "true"
+        with:
+          projectPath: fiber-agent
+          tagName: ${{ steps.release_meta.outputs.tag }}
+          releaseName: "FSP Sidecar ${{ steps.release_meta.outputs.tag }}"
+          releaseBody: |
+            Fiber Agent desktop sidecar for the FSPDevs / Fiber Network testnet.
+
+            Installers: Windows (NSIS/MSI), macOS (DMG/app), Linux (deb/AppImage).
+
+            Defaults: `MFA_HOST=mfa.fsprotocol.com`, `MFA_WS_SECURE=true`.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

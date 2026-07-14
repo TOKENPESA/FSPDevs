@@ -21,9 +21,11 @@ use crate::{
     resolve_fnn_rpc_url, send_or_queue_telemetry, AgentDb, ConfigUpdatePayload, MeshPubkeyRegistry,
     MeshPulsePayload,
 };
-use crate::storage::{channel_cache_from_mesh, UtilityPaymentIntent};
+use crate::storage::{channel_cache_from_mesh, resolve_identity_db_path, UtilityPaymentIntent};
 use mesh_core::network::PeerModulePacket;
+use mesh_core::{valid_agent_id, RING_SIZE};
 use mesh_core::types::{EdgeTransaction, EdgeTxType, L2Asset, SingleCapacityParams};
+use serde::Deserialize;
 
 const BALANCE_ALERT_COOLDOWN_SECS: u64 = 300;
 
@@ -62,6 +64,130 @@ impl SidecarConfig {
                 .unwrap_or(false),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct MfaRegistration {
+    agent_id: String,
+    #[serde(default)]
+    agent_id_numeric: Option<u16>,
+    agent_secret: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAgentIdentity {
+    pub agent_id_label: String,
+    pub agent_id: u16,
+    pub agent_secret: String,
+}
+
+fn parse_fa_agent_label(label: &str) -> Result<u16, String> {
+    let trimmed = label.trim();
+    let numeric = trimmed
+        .strip_prefix("FA-")
+        .or_else(|| trimmed.strip_prefix("fa-"))
+        .unwrap_or(trimmed);
+    let id: u16 = numeric
+        .parse()
+        .map_err(|_| format!("invalid agent_id label '{label}'"))?;
+    if !valid_agent_id(id) {
+        return Err(format!("agent_id out of range: {id} (must be 1..={RING_SIZE})"));
+    }
+    Ok(id)
+}
+
+fn auto_register_enabled() -> bool {
+    match std::env::var("MFA_AUTO_REGISTER") {
+        Ok(raw) => {
+            let v = raw.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+        }
+        // When AGENT_ID is unset, prefer dynamic MFA onboarding.
+        Err(_) => std::env::var("AGENT_ID").is_err(),
+    }
+}
+
+/// Ensures this sidecar has an MFA-issued identity (FA-N + HMAC secret).
+///
+/// 1. Load from local SQLite if present  
+/// 2. Otherwise POST `/api/register` to MFA and persist the result  
+pub async fn ensure_agent_identity(
+    db: &AgentDb,
+    mfa_host: &str,
+) -> Result<ResolvedAgentIdentity, String> {
+    if let Some(existing) = db.load_agent_identity()? {
+        return Ok(ResolvedAgentIdentity {
+            agent_id_label: existing.agent_id,
+            agent_id: existing.agent_id_numeric,
+            agent_secret: existing.agent_secret,
+        });
+    }
+
+    let client = reqwest::Client::new();
+    let reg_url = format!("{}/api/register", mfa_http_base(mfa_host));
+    let response = client
+        .post(&reg_url)
+        .send()
+        .await
+        .map_err(|err| format!("MFA /api/register request failed: {err}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("MFA /api/register body read failed: {err}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "MFA /api/register returned HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+
+    let reg: MfaRegistration = serde_json::from_str(&body)
+        .map_err(|err| format!("MFA /api/register JSON decode failed: {err}"))?;
+    if reg.agent_secret.len() < 32 {
+        return Err("MFA /api/register returned an invalid agent_secret".to_string());
+    }
+
+    let agent_id = match reg.agent_id_numeric {
+        Some(id) if valid_agent_id(id) => id,
+        _ => parse_fa_agent_label(&reg.agent_id)?,
+    };
+    let agent_id_label = if reg.agent_id.trim().is_empty() {
+        format!("FA-{agent_id}")
+    } else {
+        reg.agent_id.trim().to_string()
+    };
+
+    db.save_agent_identity(&agent_id_label, agent_id, &reg.agent_secret)?;
+
+    Ok(ResolvedAgentIdentity {
+        agent_id_label,
+        agent_id,
+        agent_secret: reg.agent_secret,
+    })
+}
+
+/// Resolves sidecar identity for process startup (SQLite → MFA register, or legacy env).
+pub async fn resolve_runtime_identity(
+    config: &mut SidecarConfig,
+) -> Result<ResolvedAgentIdentity, String> {
+    if !auto_register_enabled() {
+        let agent_id = crate::parse_agent_id()?;
+        return Ok(ResolvedAgentIdentity {
+            agent_id_label: format!("FA-{agent_id}"),
+            agent_id,
+            agent_secret: config.ws_token.clone(),
+        });
+    }
+
+    let identity_db = AgentDb::open_path(resolve_identity_db_path())?;
+    let identity = ensure_agent_identity(&identity_db, &config.mfa_host).await?;
+    config.ws_token = identity.agent_secret.clone();
+    println!(
+        "🪪 [IDENTITY] Using MFA-issued {} (secret persisted locally)",
+        identity.agent_id_label
+    );
+    Ok(identity)
 }
 
 fn log_agent(quiet: bool, agent_id: u16, msg: &str) {
@@ -734,6 +860,46 @@ mod utility_sidecar_tests {
         let payment = intent_to_edge_transaction(1, &sample_intent("0xdeadbeef"));
         let fnn = LiveFnnClient::new("http://127.0.0.1:1".to_string());
         assert!(!verify_utility_payment(&payment, &db, &fnn).await);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod identity_onboarding_tests {
+    use super::*;
+
+    #[test]
+    fn parse_fa_agent_label_accepts_fa_prefix() {
+        assert_eq!(parse_fa_agent_label("FA-12").unwrap(), 12);
+        assert_eq!(parse_fa_agent_label("fa-7").unwrap(), 7);
+        assert_eq!(parse_fa_agent_label("3").unwrap(), 3);
+    }
+
+    #[test]
+    fn parse_fa_agent_label_rejects_out_of_range() {
+        assert!(parse_fa_agent_label("FA-0").is_err());
+        assert!(parse_fa_agent_label("FA-99999").is_err());
+    }
+
+    #[test]
+    fn ensure_agent_identity_uses_persisted_row() {
+        let path = std::env::temp_dir().join(format!(
+            "fiber-agent-identity-{}.db",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let db = AgentDb::open_path(path.clone()).expect("open");
+        db.save_agent_identity("FA-9", 9, &"a".repeat(64))
+            .expect("save");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let identity = runtime
+            .block_on(ensure_agent_identity(&db, "127.0.0.1:9"))
+            .expect("load identity without MFA call");
+        assert_eq!(identity.agent_id, 9);
+        assert_eq!(identity.agent_id_label, "FA-9");
+        assert_eq!(identity.agent_secret.len(), 64);
         let _ = std::fs::remove_file(path);
     }
 }

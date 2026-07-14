@@ -33,7 +33,10 @@ use serde::{Deserialize, Serialize};
 
 pub use api::spawn_module_api_server;
 pub use clearing_client::{mfa_clearing_url, post_float_crisis_to_mfa};
-pub use daemon::{run_agent_sidecar, run_utility_sidecar_loop, spawn_sidecar_mfa_control_ws, SidecarConfig};
+pub use daemon::{
+    ensure_agent_identity, resolve_runtime_identity, run_agent_sidecar, run_utility_sidecar_loop,
+    spawn_sidecar_mfa_control_ws, ResolvedAgentIdentity, SidecarConfig,
+};
 pub use mfa_control_bus::MfaControlBus;
 pub use fsp_fixed_math::TelcoFloatFixedPoint;
 pub use fees::FeeCalculationEngine;

@@ -118,6 +118,14 @@ CREATE TABLE IF NOT EXISTS sidecar_registry_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 11. MFA-issued control-plane identity (FA-N + HMAC secret)
+CREATE TABLE IF NOT EXISTS agent_identity (
+    agent_id TEXT NOT NULL,
+    agent_id_numeric INTEGER NOT NULL,
+    agent_secret TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 "#;
 
 /// Initializes the offline utility payment ledger (WAL + intent queue schema).
@@ -267,6 +275,8 @@ impl AgentDb {
             .map_err(|err| sanitize_storage_error("migrate fiat edge capacities", err))?;
         migrate_module_registry_meta(&conn)
             .map_err(|err| sanitize_storage_error("migrate module registry meta", err))?;
+        migrate_agent_identity_table(&conn)
+            .map_err(|err| sanitize_storage_error("migrate agent identity", err))?;
         init_offline_ledger(&conn)
             .map_err(|err| sanitize_storage_error("init offline ledger", err))?;
 
@@ -966,11 +976,54 @@ impl AgentDb {
         .map_err(|err| sanitize_storage_error("fetch installed module", err))
     }
 
+    /// Loads the persisted MFA-issued identity, if present.
+    pub fn load_agent_identity(&self) -> Result<Option<StoredAgentIdentity>, String> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT agent_id, agent_id_numeric, agent_secret FROM agent_identity LIMIT 1",
+            [],
+            |row| {
+                Ok(StoredAgentIdentity {
+                    agent_id: row.get(0)?,
+                    agent_id_numeric: row.get::<_, i64>(1)? as u16,
+                    agent_secret: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|err| sanitize_storage_error("load agent identity", err))
+    }
+
+    /// Replaces any prior MFA identity with the issued FA-N + HMAC secret.
+    pub fn save_agent_identity(
+        &self,
+        agent_id: &str,
+        agent_id_numeric: u16,
+        agent_secret: &str,
+    ) -> Result<(), String> {
+        let conn = self.lock_conn()?;
+        conn.execute("DELETE FROM agent_identity", [])
+            .map_err(|err| sanitize_storage_error("clear agent identity", err))?;
+        conn.execute(
+            "INSERT INTO agent_identity (agent_id, agent_id_numeric, agent_secret) VALUES (?1, ?2, ?3)",
+            params![agent_id, agent_id_numeric as i64, agent_secret],
+        )
+        .map_err(|err| sanitize_storage_error("save agent identity", err))?;
+        Ok(())
+    }
+
     fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>, String> {
         self.conn
             .lock()
             .map_err(|_| "database mutex poisoned".to_string())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredAgentIdentity {
+    pub agent_id: String,
+    pub agent_id_numeric: u16,
+    pub agent_secret: String,
 }
 
 fn insert_fiat_edge_on_conn(conn: &Connection, tx: &EdgeTransaction) -> Result<(), String> {
@@ -1026,6 +1079,7 @@ fn init_single_writer_connection(db_path: &Path) -> Connection {
     migrate_dicoba_contributions_columns(&conn).expect("Failed to migrate dicoba columns");
     migrate_fiat_edge_capacities_column(&conn).expect("Failed to migrate fiat edge capacities");
     migrate_module_registry_meta(&conn).expect("Failed to migrate module registry meta");
+    migrate_agent_identity_table(&conn).expect("Failed to migrate agent identity");
     init_offline_ledger(&conn).expect("Failed to init offline ledger");
     conn
 }
@@ -1148,6 +1202,15 @@ pub fn resolve_db_path(agent_id: u16) -> PathBuf {
     PathBuf::from(dir).join(format!("fa-{agent_id}.db"))
 }
 
+/// Shared sidecar bootstrap DB for MFA-issued `FA-N` + HMAC secret (before agent id is known).
+pub fn resolve_identity_db_path() -> PathBuf {
+    if let Ok(path) = env::var("FIBER_AGENT_IDENTITY_DB_PATH") {
+        return PathBuf::from(path);
+    }
+    let dir = env::var("FIBER_AGENT_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string());
+    PathBuf::from(dir).join("agent_identity.db")
+}
+
 fn retention_hours() -> i64 {
     env::var("FIBER_AGENT_RETENTION_HOURS")
         .ok()
@@ -1201,6 +1264,21 @@ fn migrate_module_registry_meta(conn: &Connection) -> Result<(), String> {
             .map_err(|err| sanitize_storage_error("bump user_version", err))?;
     }
 
+    Ok(())
+}
+
+fn migrate_agent_identity_table(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS agent_identity (
+            agent_id TEXT NOT NULL,
+            agent_id_numeric INTEGER NOT NULL,
+            agent_secret TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    )
+    .map_err(|err| sanitize_storage_error("migrate agent_identity", err))?;
     Ok(())
 }
 
@@ -1581,6 +1659,26 @@ mod tests {
     fn resolve_db_path_uses_agent_suffix() {
         let path = resolve_db_path(77);
         assert!(path.to_string_lossy().contains("fa-77.db"));
+    }
+
+    #[test]
+    fn agent_identity_round_trip() {
+        let path = std::env::temp_dir().join(format!(
+            "fiber-agent-identity-store-{}.db",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let db = AgentDb::open_path(path.clone()).expect("open db");
+        assert!(db.load_agent_identity().expect("load").is_none());
+        db.save_agent_identity("FA-5", 5, &"b".repeat(64))
+            .expect("save");
+        let loaded = db.load_agent_identity().expect("load").expect("row");
+        assert_eq!(loaded.agent_id, "FA-5");
+        assert_eq!(loaded.agent_id_numeric, 5);
+        assert_eq!(loaded.agent_secret.len(), 64);
+        assert!(resolve_identity_db_path()
+            .to_string_lossy()
+            .contains("agent_identity.db"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

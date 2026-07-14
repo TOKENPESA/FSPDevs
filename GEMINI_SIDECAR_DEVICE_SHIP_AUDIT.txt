@@ -1,0 +1,226 @@
+================================================================================
+FSPDevs / TOKENPESA — Fiber Agent Sidecar Device-Ship Audit Snapshot
+Date: 2026-07-15
+Scope: Windows + Android Tauri Sidecar, FNN (bundled or companion), MFA droplet register
+Git: origin/main (post-commit 1a3c4b9 — non-tech UI + MFA WS origin allowlist)
+================================================================================
+
+GOAL
+----
+Ship Fiber Agent Sidecar as a separate-device app (Windows desktop and/or Android)
+that can:
+  1) Install/run on a retail/agent laptop or phone
+  2) Register itself to the live MFA droplet (mfa.fsprotocol.com / 167.99.150.153)
+  3) Use Fiber Network Node (FNN) for real testnet payments (not silent demo)
+  4) Operate DiCoBa / mobile-money modules as a kiosk / agent console
+
+VERDICT (as of this snapshot)
+-----------------------------
+Control plane (MFA TLS defaults + auto-register + Tauri shell + operator UI) is
+substantially implemented.
+
+Product shipping as a SELF-CONTAINED Windows/Android app that BUNDLES live FNN
+and settles Fiber payments end-to-end is NOT ready.
+
+FNN on the laptop is an EXTERNAL process today (fnn-testnet/fnn.exe → :8227).
+If FNN is down, Sidecar silently falls back to SimulatedFnnClient while
+FNN_MODE may still say "testnet" — operators can confuse demo receipts with live
+payments.
+
+Android: env prep scripts exist; `tauri android init` / gen/android project does
+NOT exist in-repo yet. On-device FNN is not packaged.
+
+
+DEPLOY TOPOLOGY (current)
+-------------------------
+[ Windows / Android Sidecar FA-N ]  --WSS/HTTPS-->  [ MFA droplet ]
+        |                                            mfa.fsprotocol.com
+        |                                            167.99.150.153
+        v (optional local)
+[ Local FNN :8227 ]  <--P2P Fiber channels-->  [ Treasury Hub FA-1 + FNN ]
+                                               134.122.120.65
+                                               FNN P2P :8228
+                                               FNN RPC private (not public edge)
+
+INVENTORY: deploy/droplet/INVENTORY.env
+
+
+WHAT ALREADY WORKS
+------------------
+[MFA / identity]
+- Defaults: MFA_HOST=mfa.fsprotocol.com, MFA_WS_SECURE=true, FNN_MODE=testnet
+  (fiber-agent/src/mfa_ws_auth.rs apply_secure_mfa_env_defaults)
+- Auto-register when MFA_AGENT_WS_TOKEN unset:
+  MFA_AUTO_REGISTER=true → POST /api/register → persist agent_identity.db
+  (fiber-agent/src/daemon.rs resolve_runtime_identity; Tauri lib.rs boot)
+- Control WS uses HMAC headers (X-MFA-Agent-Auth / X-Agent-ID / X-MFA-Timestamp)
+- MFA allows loopback Origin for native sidecars + MFA_WS_ALLOWED_ORIGINS for HTTPS
+  (master-fiber-agent/src/auth.rs)
+
+[Tauri Sidecar UI]
+- Desktop shell: fiber-agent/src-tauri/
+- Non-tech operator copy for dashboard / DiCoBa / cash desk / OOB
+- JoyID + faucet funding panel (needs live FNN for real address)
+- OOB offline QR for guarantor / refill / deposit handoff
+- Module hot-swap / App Store panels present
+
+[FNN]
+- LiveFnnClient JSON-RPC client (list_channels, open_channel, send_payment, …)
+- Local testnet tooling: fnn-testnet/start-testnet.ps1 (RPC http://127.0.0.1:8227)
+- Treasury Hub already runs Linux FNN (systemd) for hub FA-1
+- resolve_fnn_backend: live probe → else SimulatedFnnClient fallback
+
+[Android prep only]
+- scripts/setup-android-env.ps1 / .sh
+- npm scripts: tauri:android:env | init | dev | build
+- No gen/android tree committed / no proven APK
+
+
+CRITICAL GAPS — WINDOWS APP ON SEPARATE DEVICE
+----------------------------------------------
+1. FNN NOT BUNDLED
+   tauri.conf.json has no externalBin / sidecar fnn.exe.
+   Edge defaults to http://127.0.0.1:8227. Without local FNN → simulate.
+
+2. HUB FNN RPC NOT FOR EDGE CUSTODY
+   Treasury RPC is loopback / nginx-restricted to MFA. Retail Windows FA cannot
+   safely use Hub :8227 as its own funding wallet RPC.
+
+3. SILENT SIMULATE FALLBACK UX RISK
+   UI can appear "testnet" while DiCoBa contributions are local-only when FNN
+   is down or FNN_MODE=simulate. Need hard "Demo vs Live" gating for ship.
+
+4. STATE DIR / INSTALLER
+   Identity/state often under relative .fiber-agent/ — fragile for installed apps.
+   Need absolute FIBER_AGENT_STATE_DIR + proper Windows installer (tauri build /
+   NSIS) and first-run story.
+
+5. RELEASE SIGNING KEYS
+   Telemetry / OOB signing needs per-device FSP_AGENT_SECRET_KEY (or allowed
+   production secret path). Dev-key short-circuits are not ship-safe.
+
+6. CHANNEL / LIQUIDITY WIZARD MISSING
+   fund CKB → open Fiber channel → ready is still script/ops driven
+   (fnn-cli, setup-public-channel.ps1, droplet scripts). Not an in-app wizard.
+
+7. DiCoBa P2P SETTLEMENT
+   Intended: FA → vault leader_pubkey via FNN send_payment + local receipt.
+   Local/simulate path skips mesh settlement. Leader pubkey in UI is still
+   often a placeholder (e.g. 03leader_test).
+
+
+CRITICAL GAPS — ANDROID APP
+---------------------------
+1. tauri android init NOT DONE — no src-tauri/gen/android
+2. SDK/NDK/JAVA_HOME + rust Android targets required; no CI green APK proof
+3. Cleartext/network security for any local HTTP FNN not designed (TLS MFA OK)
+4. JoyID / passkey return path in WebView unproven (portal already opens external)
+5. On-device Fiber/FNN binary packaging DOES NOT EXIST
+   Mobile with FNN_MODE=testnet will almost always simulate unless architecture
+   chooses: companion PC FNN, remote gated FNN API, or a new light-client design
+6. Tauri capabilities still desktop-oriented (windows: main*)
+
+
+FNN BUNDLING REALITY
+--------------------
+| Question                         | Repo fact                                      |
+|----------------------------------|------------------------------------------------|
+| Is fnn.exe inside Tauri bundle?  | NO                                             |
+| How does Sidecar get FNN?        | FNN_RPC_URL or 127.0.0.1:8227 else simulate    |
+| Where is live FNN today?         | Local fnn-testnet OR Treasury Hub              |
+| Mobile FNN                       | Not feasible as-is; needs new architecture     |
+
+
+MFA REGISTRATION CHECKLIST
+--------------------------
+Done in code:
+  [x] POST /api/register on MFA
+  [x] Persist FA-N + secret in SQLite
+  [x] Tauri auto-register default
+  [x] WSS to mfa.fsprotocol.com with HMAC
+  [x] Loopback Origin allow for native sidecars
+
+Still required for shippable edge device:
+  [ ] Clean Windows install E2E: register → connected_agent_ids → telemetry OK
+  [ ] Absolute state directory for installed apps
+  [ ] Register Fiber node pubkey into MFA mesh-pubkeys (≠ signing key)
+  [ ] Ingress rate-limit / abuse controls for public /api/register
+  [ ] Per-device production signing secret
+  [ ] Optional: MFA hot-swap channel open after register
+
+
+REMAINING MILESTONES (recommended)
+----------------------------------
+M0  Prove MFA E2E from clean Windows (auto-register → WSS → hub sees FA-N)
+M1  Decide FNN product story: (A) bundle/side-install local fnn on Windows,
+    (B) official "demo edge / Hub custody", or (C) remote FNN API — stop implying
+    bundled FNN if not shipping it
+M2  Hard Demo vs Live UX + disable silent fake "testnet" when simulate backend
+M3  Identity + mesh-pubkey registry for each edge device
+M4  Liquidity: fund CKB + open ≥1 Fiber channel; one live DiCoBa send_payment
+M5  Windows installer (tauri build), icons, absolute STATE_DIR, first-run guide
+M6  Android scaffold: tauri android init, NDK CI, cleartext policy, capabilities
+M7  Android networking architecture decision (no on-device FNN in current repo)
+M8  In-app fund → channel → contribute wizard; harden register rate limits
+
+
+KEY FILE PATHS
+--------------
+Tauri:
+  fiber-agent/src-tauri/tauri.conf.json
+  fiber-agent/src-tauri/src/lib.rs
+  fiber-agent/src-tauri/src/commands.rs
+  fiber-agent/src-tauri/src/fnn_address.rs
+  fiber-agent/package.json
+
+Identity / MFA:
+  fiber-agent/src/daemon.rs
+  fiber-agent/src/mfa_ws_auth.rs
+  fiber-agent/src/identity.rs
+  fiber-agent/src/storage.rs
+  master-fiber-agent/src/handlers/auth.rs
+  master-fiber-agent/src/auth.rs
+
+FNN:
+  fiber-agent/src/lib.rs (resolve_fnn_backend)
+  fiber-agent/src/fnn_client.rs
+  fiber-agent/src/mesh_ports.rs
+  fnn-testnet/start-testnet.ps1
+  deploy/droplet/install-fnn.sh
+  deploy/droplet/nginx-fnn-rpc.sh
+
+DiCoBa / funding / OOB:
+  fiber-agent/src/dicoba_bridge.rs
+  fiber-agent/src-tauri/frontend/js/funding.js
+  fiber-agent/src-tauri/frontend/js/oob-fallback.js
+
+Android prep:
+  fiber-agent/scripts/setup-android-env.ps1
+  fiber-agent/.env.example
+
+Deploy:
+  deploy/droplet/INVENTORY.env
+  deploy/droplet/README.md
+  deploy/droplet/setup-tls-fsprotocol.sh
+  deploy/droplet/verify-phase-b-live.sh
+
+
+KNOWN OPERATIONAL NOTES (2026-07-14/15)
+---------------------------------------
+- MFA droplet sources synced for WS origin allowlist; service active.
+- Treasury Hub fiber-agent-daemon + FNN active; FA-1 WS to MFA connected.
+- Local Windows FNN may fail with:
+    Secret key file error: decryption failed: aead::Error
+  if FIBER_SECRET_KEY_PASSWORD mismatches encrypted data/ckb/key.
+  Default password in scripts: fspdevs-local
+- get-ckb-address.ps1 requires FNN RPC up; otherwise garbage/partial address.
+
+
+BOTTOM LINE
+-----------
+Close to shipping a MFA-connected Sidecar *control console* on Windows if you
+accept external FNN or explicit Demo mode.
+
+Not ready to market as "Windows + Android app with FNN included that settles
+Fiber payments and just registers to the MFA droplet" without completing M0–M7.
+================================================================================

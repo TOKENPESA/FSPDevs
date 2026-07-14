@@ -14,8 +14,57 @@ use crate::{agent_fnn_pubkey, MeshChannelState, MeshPulsePayload};
 
 pub const DEFAULT_DB_WRITE_QUEUE_CAPACITY: usize = 256;
 
+/// Legacy relative fallback only — prefer [`resolve_agent_state_dir`].
 pub const DEFAULT_STATE_DIR: &str = ".fiber-agent";
+/// App vendor folder under the OS data directory (`%APPDATA%` on Windows).
+pub const STATE_VENDOR_DIR: &str = "TokenPesa";
+/// Leaf folder for SQLite + CKB/FNN node data.
+pub const STATE_LEAF_DIR: &str = "state";
 pub const DEFAULT_RETENTION_HOURS: i64 = 48;
+
+/// Absolute state root for installed sidecars.
+///
+/// Resolution order:
+/// 1. `FIBER_AGENT_STATE_DIR` (explicit override)
+/// 2. `%APPDATA%\TokenPesa\state` on Windows / OS data dir equivalent elsewhere
+///
+/// Creates the directory when missing.
+pub fn resolve_agent_state_dir() -> Result<PathBuf, String> {
+    if let Ok(raw) = env::var("FIBER_AGENT_STATE_DIR") {
+        let dir = PathBuf::from(raw.trim());
+        if dir.as_os_str().is_empty() {
+            return Err("FIBER_AGENT_STATE_DIR is empty".to_string());
+        }
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| sanitize_storage_error("create FIBER_AGENT_STATE_DIR", err))?;
+        return Ok(dir);
+    }
+
+    // Maps state strictly to %APPDATA%\TokenPesa\state\ (dirs::data_dir on Windows).
+    let mut state_dir = dirs::data_dir().ok_or_else(|| {
+        "Failed to locate AppData directory — set FIBER_AGENT_STATE_DIR to an absolute path"
+            .to_string()
+    })?;
+    state_dir.push(STATE_VENDOR_DIR);
+    state_dir.push(STATE_LEAF_DIR);
+    std::fs::create_dir_all(&state_dir)
+        .map_err(|err| sanitize_storage_error("create TokenPesa state directory", err))?;
+    Ok(state_dir)
+}
+
+/// CKB / bundled FNN node data under the absolute state root (`…/state/fnn`).
+pub fn resolve_fnn_state_dir() -> Result<PathBuf, String> {
+    if let Ok(raw) = env::var("FNN_DATA_DIR") {
+        let dir = PathBuf::from(raw.trim());
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| sanitize_storage_error("create FNN_DATA_DIR", err))?;
+        return Ok(dir);
+    }
+    let dir = resolve_agent_state_dir()?.join("fnn");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| sanitize_storage_error("create FNN state directory", err))?;
+    Ok(dir)
+}
 
 const SCHEMA_SQL: &str = r#"
 -- 1. LOCAL CHANNEL SNAPSHOT CACHE
@@ -1198,8 +1247,10 @@ pub fn resolve_db_path(agent_id: u16) -> PathBuf {
         return PathBuf::from(path);
     }
 
-    let dir = env::var("FIBER_AGENT_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string());
-    PathBuf::from(dir).join(format!("fa-{agent_id}.db"))
+    match resolve_agent_state_dir() {
+        Ok(dir) => dir.join(format!("fa-{agent_id}.db")),
+        Err(_) => PathBuf::from(DEFAULT_STATE_DIR).join(format!("fa-{agent_id}.db")),
+    }
 }
 
 /// Shared sidecar bootstrap DB for MFA-issued `FA-N` + HMAC secret (before agent id is known).
@@ -1207,8 +1258,10 @@ pub fn resolve_identity_db_path() -> PathBuf {
     if let Ok(path) = env::var("FIBER_AGENT_IDENTITY_DB_PATH") {
         return PathBuf::from(path);
     }
-    let dir = env::var("FIBER_AGENT_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string());
-    PathBuf::from(dir).join("agent_identity.db")
+    match resolve_agent_state_dir() {
+        Ok(dir) => dir.join("agent_identity.db"),
+        Err(_) => PathBuf::from(DEFAULT_STATE_DIR).join("agent_identity.db"),
+    }
 }
 
 fn retention_hours() -> i64 {
@@ -1659,6 +1712,23 @@ mod tests {
     fn resolve_db_path_uses_agent_suffix() {
         let path = resolve_db_path(77);
         assert!(path.to_string_lossy().contains("fa-77.db"));
+    }
+
+    #[test]
+    fn resolve_agent_state_dir_is_absolute_tokenpesa() {
+        let prev = env::var("FIBER_AGENT_STATE_DIR").ok();
+        env::remove_var("FIBER_AGENT_STATE_DIR");
+        let dir = resolve_agent_state_dir().expect("state dir");
+        assert!(dir.is_absolute(), "expected absolute path, got {}", dir.display());
+        let lossy = dir.to_string_lossy();
+        assert!(
+            lossy.contains("TokenPesa") && lossy.contains("state"),
+            "expected TokenPesa/state under OS data dir, got {lossy}"
+        );
+        match prev {
+            Some(value) => env::set_var("FIBER_AGENT_STATE_DIR", value),
+            None => env::remove_var("FIBER_AGENT_STATE_DIR"),
+        }
     }
 
     #[test]

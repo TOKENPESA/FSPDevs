@@ -348,6 +348,13 @@ impl LiveFnnClient {
             .map_err(|e| format!("FNN JSON parse error: {e}"))
     }
 
+    /// Lightweight liveness probe (`node_info`) before mounting a live backend.
+    pub async fn ping(&self) -> Result<(), String> {
+        self.call_rpc("node_info", serde_json::json!([]))
+            .await
+            .map(|_| ())
+    }
+
     async fn poll_payment_result(
         &self,
         payment_hash: &str,

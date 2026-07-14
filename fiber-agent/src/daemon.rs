@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +23,9 @@ use crate::{
     resolve_fnn_rpc_url, send_or_queue_telemetry, AgentDb, ConfigUpdatePayload, MeshPubkeyRegistry,
     MeshPulsePayload,
 };
-use crate::storage::{channel_cache_from_mesh, resolve_identity_db_path, UtilityPaymentIntent};
+use crate::storage::{
+    channel_cache_from_mesh, resolve_identity_db_path, UtilityPaymentIntent,
+};
 use mesh_core::network::PeerModulePacket;
 use mesh_core::{valid_agent_id, RING_SIZE};
 use mesh_core::types::{EdgeTransaction, EdgeTxType, L2Asset, SingleCapacityParams};
@@ -170,10 +174,52 @@ pub async fn ensure_agent_identity(
     })
 }
 
+/// Maps sidecar SQLite / CKB state strictly to `%APPDATA%\TokenPesa\state\` on Windows
+/// (`dirs::data_dir()`; override with `FIBER_AGENT_STATE_DIR`).
+///
+/// Never returns a CWD-relative `.fiber-agent` path — installed apps must not write beside Program Files.
+pub fn resolve_runtime_state_dir() -> PathBuf {
+    if let Ok(raw) = env::var("FIBER_AGENT_STATE_DIR") {
+        let state_dir = PathBuf::from(raw.trim());
+        assert!(
+            !state_dir.as_os_str().is_empty(),
+            "FIBER_AGENT_STATE_DIR is empty"
+        );
+        if !state_dir.exists() {
+            std::fs::create_dir_all(&state_dir)
+                .expect("Failed to create absolute state directory");
+        }
+        return state_dir;
+    }
+
+    // %APPDATA% on Windows / XDG data home elsewhere — not LocalAppData.
+    let mut state_dir = dirs::data_dir().expect("Failed to locate AppData directory");
+    state_dir.push("TokenPesa");
+    state_dir.push("state");
+
+    if !state_dir.exists() {
+        std::fs::create_dir_all(&state_dir).expect("Failed to create absolute state directory");
+    }
+
+    state_dir
+}
+
 /// Resolves sidecar identity for process startup (SQLite → MFA register, or legacy env).
+///
+/// Pins all subsequent persistence under [`resolve_runtime_state_dir`].
 pub async fn resolve_runtime_identity(
     config: &mut SidecarConfig,
 ) -> Result<ResolvedAgentIdentity, String> {
+    let state_dir = resolve_runtime_state_dir();
+    // Pin env so SQLite / profile / FNN helpers share the same absolute root.
+    if env::var("FIBER_AGENT_STATE_DIR").is_err() {
+        env::set_var("FIBER_AGENT_STATE_DIR", &state_dir);
+    }
+    println!(
+        "💾 [STATE] Sidecar data directory: {}",
+        state_dir.display()
+    );
+
     if !auto_register_enabled() {
         let agent_id = crate::parse_agent_id()?;
         return Ok(ResolvedAgentIdentity {
@@ -183,12 +229,14 @@ pub async fn resolve_runtime_identity(
         });
     }
 
-    let identity_db = AgentDb::open_path(resolve_identity_db_path())?;
+    let identity_path = resolve_identity_db_path();
+    let identity_db = AgentDb::open_path(identity_path.clone())?;
     let identity = ensure_agent_identity(&identity_db, &config.mfa_host).await?;
     config.ws_token = identity.agent_secret.clone();
     println!(
-        "🪪 [IDENTITY] Using MFA-issued {} (secret persisted locally)",
-        identity.agent_id_label
+        "🪪 [IDENTITY] Using MFA-issued {} (secret at {})",
+        identity.agent_id_label,
+        identity_path.display()
     );
     Ok(identity)
 }
@@ -209,11 +257,13 @@ async fn resolve_backend(
     agent_id: u16,
     rpc_url: &str,
     force_simulate: bool,
-) -> Box<dyn FiberNodeRpc + Send + Sync> {
+) -> Result<Box<dyn FiberNodeRpc + Send + Sync>, String> {
     if force_simulate {
-        return Box::new(crate::fnn_client::SimulatedFnnClient::new(agent_id));
+        return Ok(Box::new(crate::fnn_client::SimulatedFnnClient::new(agent_id)));
     }
-    resolve_fnn_backend(agent_id, rpc_url).await
+    resolve_fnn_backend(agent_id, rpc_url)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 /// Runs one Fiber Agent sidecar loop (MFA WS + telemetry + FNN poll) until the task is cancelled.
@@ -239,7 +289,13 @@ pub async fn run_agent_sidecar(agent_id: u16, config: SidecarConfig) {
     };
 
     let fnn_backend: Arc<Mutex<Box<dyn FiberNodeRpc + Send + Sync>>> = Arc::new(Mutex::new(
-        resolve_backend(agent_id, &local_fnn_rpc, config.force_simulate_fnn).await,
+        match resolve_backend(agent_id, &local_fnn_rpc, config.force_simulate_fnn).await {
+            Ok(backend) => backend,
+            Err(err) => {
+                log_agent_err(quiet, agent_id, &err);
+                return;
+            }
+        },
     ));
     let pubkey_cache: Arc<RwLock<HashMap<u16, String>>> = Arc::new(RwLock::new(HashMap::new()));
     let mesh_registry = Arc::new(MeshPubkeyRegistry::load());

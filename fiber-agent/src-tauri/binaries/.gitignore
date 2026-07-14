@@ -1,0 +1,5 @@
+# Platform-suffixed FNN sidecars are large release binaries — do not commit.
+# Place copies via: npm run prepare:fnn-sidecar
+*
+!.gitignore
+!README.md

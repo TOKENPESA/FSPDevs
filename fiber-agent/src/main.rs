@@ -2,7 +2,8 @@
 //!
 //! Dynamic MFA onboarding:
 //! - Set `MFA_AUTO_REGISTER=true` (or omit `AGENT_ID`) to call `POST /api/register`
-//!   and persist FA-N + HMAC secret under `FIBER_AGENT_STATE_DIR/agent_identity.db`.
+//!   and persist FA-N + HMAC secret under
+//!   `%APPDATA%\TokenPesa\state\agent_identity.db` (or `FIBER_AGENT_STATE_DIR`).
 //! - Set `AGENT_ID` + `MFA_AGENT_WS_TOKEN` with `MFA_AUTO_REGISTER=false` for legacy hub nodes.
 
 use fiber_agent_sidecar::{resolve_runtime_identity, run_agent_sidecar, SidecarConfig};

@@ -65,6 +65,18 @@ export async function getSidecarStats() {
 }
 
 /**
+ * @returns {Promise<{ ok: boolean, mode: string, rpcUrl: string, error?: string | null }>}
+ */
+export async function getFnnBootStatus() {
+  if (!invoke) {
+    throw new Error("Tauri runtime unavailable");
+  }
+  return /** @type {Promise<{ ok: boolean, mode: string, rpcUrl: string, error?: string | null }>} */ (
+    invoke("get_fnn_boot_status")
+  );
+}
+
+/**
  * @param {number} agentId
  * @returns {Promise<string>}
  */

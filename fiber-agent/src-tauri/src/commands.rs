@@ -12,13 +12,38 @@ use fiber_agent::mesh::{
 use fiber_agent::module_catalog::{catalog_entries, is_allowed_method, is_allowed_oob_peer_method};
 use fiber_agent::module_host::SidecarHost;
 use fiber_agent::power::{AdaptivePowerController, PowerProfile};
-use fiber_agent::MfaControlBus;
+use fiber_agent::{MfaControlBus, FNN_FATAL_BOOT_MESSAGE};
 use mesh_core::jungukuu_types::{JunguKuuVault, MicroContributionReceipt};
 use mesh_core::types::{EdgeTransaction, FeeCalculationBreakdown};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex as TokioMutex;
+
+/// `None` when live/testnet FNN failed to boot (no silent simulate fallback).
+pub type OptionalSidecarHost = Option<Arc<TokioMutex<SidecarHost>>>;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FnnBootStatus {
+    pub ok: bool,
+    pub mode: String,
+    pub rpc_url: String,
+    pub error: Option<String>,
+}
+
+fn require_host_arc(host: &OptionalSidecarHost) -> Result<Arc<TokioMutex<SidecarHost>>, String> {
+    host.as_ref()
+        .cloned()
+        .ok_or_else(|| FNN_FATAL_BOOT_MESSAGE.to_string())
+}
+
+#[tauri::command]
+pub async fn get_fnn_boot_status(
+    status: State<'_, Arc<FnnBootStatus>>,
+) -> Result<FnnBootStatus, String> {
+    Ok(status.inner().as_ref().clone())
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,12 +161,13 @@ async fn route_module_command(
     target_module: String,
     method: String,
     payload: serde_json::Value,
-    host: &TokioMutex<SidecarHost>,
+    host: &OptionalSidecarHost,
 ) -> Result<serde_json::Value, String> {
     validate_route_identifier(&target_module, "target_module")?;
     validate_route_identifier(&method, "method")?;
     validate_module_route(&target_module, &method)?;
 
+    let host = require_host_arc(host)?;
     let host_guard = host.lock().await;
     if !host_guard.is_module_mounted(&target_module).await {
         return Err(format!(
@@ -197,9 +223,10 @@ fn agent_registered_on_mfa(health: &serde_json::Value, agent_id: u16) -> bool {
 
 #[tauri::command]
 pub async fn get_sidecar_stats(
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
     profile: State<'_, Arc<HardwareProfileState>>,
 ) -> Result<SidecarStatsSnapshot, String> {
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let hardware_profile = profile
         .0
@@ -360,7 +387,7 @@ pub async fn dispatch_to_module(
     target_module: String,
     method: String,
     payload: serde_json::Value,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<serde_json::Value, String> {
     route_module_command(target_module, method, payload, &host).await
 }
@@ -370,7 +397,7 @@ pub async fn route_sidecar_command(
     target_module: String,
     method: String,
     payload: serde_json::Value,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<serde_json::Value, String> {
     route_module_command(target_module, method, payload, &host).await
 }
@@ -380,8 +407,9 @@ pub async fn execute_cash_in_transaction(
     customer_pubkey: String,
     amount_shannons: u64,
     fiat_received: f64,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<EdgeTransaction, String> {
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let response = host
         .route_command(
@@ -401,10 +429,11 @@ pub async fn execute_cash_in_transaction(
 pub async fn trigger_manual_fiat_rebalance(
     current_fiat: f64,
     digital_l2_balance_shannons: Option<u64>,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let digital_l2_balance_shannons = digital_l2_balance_shannons.unwrap_or(6_200_000);
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let response = host
         .route_command(
@@ -456,8 +485,9 @@ pub async fn calculate_invoice_preview(
     flat_commission: f64,
     proportional_ppm: u32,
     sovereign_levy: f64,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<FeeCalculationBreakdown, String> {
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let response = host
         .route_command(
@@ -478,7 +508,7 @@ pub async fn calculate_invoice_preview(
 pub async fn toggle_hardware_profile(
     new_profile: Option<String>,
     profile: State<'_, Arc<HardwareProfileState>>,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
     mfa_bus: State<'_, Arc<MfaControlBus>>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
@@ -502,7 +532,7 @@ pub async fn toggle_hardware_profile(
         (next.power_profile_name().to_string(), next.label().to_string())
     };
 
-    let agent_id = host.lock().await.agent_id;
+    let agent_id = require_host_arc(&host)?.lock().await.agent_id;
     let broadcast = serde_json::json!({
         "event": "FSP_HARDWARE_PROFILE_CHANGED",
         "new_profile": power_name,
@@ -553,12 +583,13 @@ pub async fn generate_oob_fallback_uri(
     target_agent: u16,
     method: String,
     payload: serde_json::Value,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<OobFallbackResponse, String> {
     validate_route_identifier(&target_module, "target_module")?;
     validate_route_identifier(&method, "method")?;
     validate_oob_peer_method(&target_module, &method)?;
 
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     if !host.is_module_mounted(&target_module).await {
         return Err(format!(
@@ -583,13 +614,14 @@ pub async fn generate_oob_fallback_uri(
 #[tauri::command]
 pub async fn process_oob_fallback(
     uri_string: String,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<String, String> {
     let trimmed = uri_string.trim();
     if trimmed.is_empty() {
         return Err("OOB URI is empty".to_string());
     }
 
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     host.process_oob_fallback(trimmed).await?;
     Ok("OOB payload routed to local module".to_string())
@@ -598,8 +630,9 @@ pub async fn process_oob_fallback(
 #[tauri::command]
 pub async fn execute_dico_contribution(
     payload: ContributionPayload,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<MicroContributionReceipt, String> {
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let response = host
         .route_command(
@@ -651,8 +684,9 @@ pub fn fetch_module_catalog() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 pub async fn fetch_installed_modules(
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<Vec<InstalledModuleSnapshot>, String> {
+    let host = require_host_arc(&host)?;
     let host = host.lock().await;
     let rows = host.db.get_installed_modules()?;
     Ok(rows
@@ -669,9 +703,10 @@ pub async fn fetch_installed_modules(
 #[tauri::command]
 pub async fn install_sidecar_module(
     request: InstallSidecarModuleRequest,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<InstalledModuleSnapshot, String> {
     let reloader = {
+        let host = require_host_arc(&host)?;
         let host = host.lock().await;
         host.hot_reloader()
             .ok_or_else(|| "hot reloader not initialized".to_string())?
@@ -690,9 +725,10 @@ pub async fn install_sidecar_module(
 #[tauri::command]
 pub async fn uninstall_sidecar_module(
     request: ModuleNameRequest,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<(), String> {
     let reloader = {
+        let host = require_host_arc(&host)?;
         let host = host.lock().await;
         host.hot_reloader()
             .ok_or_else(|| "hot reloader not initialized".to_string())?
@@ -703,9 +739,10 @@ pub async fn uninstall_sidecar_module(
 #[tauri::command]
 pub async fn toggle_sidecar_module(
     request: ToggleSidecarModuleRequest,
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<InstalledModuleSnapshot, String> {
     let reloader = {
+        let host = require_host_arc(&host)?;
         let host = host.lock().await;
         host.hot_reloader()
             .ok_or_else(|| "hot reloader not initialized".to_string())?

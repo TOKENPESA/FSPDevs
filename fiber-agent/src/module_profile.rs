@@ -6,7 +6,7 @@ use mesh_core::types::FiatProvider;
 use serde::Deserialize;
 
 use crate::module_catalog::is_known_module_id;
-use crate::storage::DEFAULT_STATE_DIR;
+use crate::storage::resolve_agent_state_dir;
 
 const PROFILE_FILE_NAME: &str = "sidecar.profile.toml";
 const MAX_PROFILE_BYTES: u64 = 32_768;
@@ -172,9 +172,8 @@ pub fn resolve_profile_path(agent_id: u16) -> PathBuf {
         return PathBuf::from(path);
     }
 
-    let dir = env::var("FIBER_AGENT_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string());
-    PathBuf::from(dir)
-        .join(format!("fa-{agent_id:04}"))
+    let dir = resolve_agent_state_dir().unwrap_or_else(|_| PathBuf::from(".fiber-agent"));
+    dir.join(format!("fa-{agent_id:04}"))
         .join(PROFILE_FILE_NAME)
 }
 

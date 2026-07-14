@@ -2,7 +2,8 @@ import { createLogger } from "../dashboard/logger.js";
 import { safeUserMessage, escapeHtml } from "./dom-security.js";
 import { modulesForMounted } from "./module-registry.js";
 import { navIcon } from "./icons.js";
-import { getSidecarStats, hasTauri } from "./sidecar-api.js";
+import { getFnnBootStatus, getSidecarStats, hasTauri } from "./sidecar-api.js";
+import { mountFatalFnnModal } from "./fnn-fatal.js";
 import { SidecarUiHost } from "./ui-host.js";
 import fundingModule from "./modules/funding/index.js";
 import appStoreModule from "./modules/app-store/index.js";
@@ -44,6 +45,19 @@ async function mountUiModulesFromBackend() {
 
 async function bootApp() {
   try {
+    if (hasTauri()) {
+      try {
+        const fnnBoot = await getFnnBootStatus();
+        if (fnnBoot && fnnBoot.ok === false) {
+          mountFatalFnnModal(fnnBoot);
+          log.error("FNN fatal boot gate", fnnBoot.error || fnnBoot);
+          return;
+        }
+      } catch (error) {
+        log.warn("get_fnn_boot_status unavailable", error);
+      }
+    }
+
     await mountUiModulesFromBackend();
     await host.boot();
   } catch (error) {

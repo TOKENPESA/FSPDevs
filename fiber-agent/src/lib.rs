@@ -34,8 +34,8 @@ use serde::{Deserialize, Serialize};
 pub use api::spawn_module_api_server;
 pub use clearing_client::{mfa_clearing_url, post_float_crisis_to_mfa};
 pub use daemon::{
-    ensure_agent_identity, resolve_runtime_identity, run_agent_sidecar, run_utility_sidecar_loop,
-    spawn_sidecar_mfa_control_ws, ResolvedAgentIdentity, SidecarConfig,
+    ensure_agent_identity, resolve_runtime_identity, resolve_runtime_state_dir, run_agent_sidecar,
+    run_utility_sidecar_loop, spawn_sidecar_mfa_control_ws, ResolvedAgentIdentity, SidecarConfig,
 };
 pub use mfa_control_bus::MfaControlBus;
 pub use fsp_fixed_math::TelcoFloatFixedPoint;
@@ -54,7 +54,10 @@ pub use mesh::{
 pub use mesh_ports::{parse_fleet_range, resolve_fnn_rpc_url};
 pub use payment::{execute_fiber_multihop_payment, execute_mesh_payment};
 pub use power::{AdaptivePowerController, PowerProfile};
-pub use storage::{AgentDb, AsyncDbQueue, DEFAULT_DB_WRITE_QUEUE_CAPACITY};
+pub use storage::{
+    resolve_agent_state_dir, resolve_fnn_state_dir, AgentDb, AsyncDbQueue,
+    DEFAULT_DB_WRITE_QUEUE_CAPACITY, STATE_LEAF_DIR, STATE_VENDOR_DIR,
+};
 pub use storage_error::sanitize_storage_error;
 pub use dicoba_bridge::DicobaEdgeClient;
 pub use modules::dicoba_module::DicobaModule;
@@ -178,34 +181,151 @@ pub fn aggregate_active_balances(channels: &[MeshChannelState]) -> (u64, u64) {
         })
 }
 
+/// Operator-facing fatal when live/testnet FNN is required but unreachable.
+pub const FNN_FATAL_BOOT_MESSAGE: &str =
+    "FATAL: Live Testnet Node Failed to Boot. Please check port 8227.";
+
+/// Errors from [`resolve_fnn_backend`] that are not process-fatal panics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FnnError {
+    /// Non-testnet mode without an explicit `FNN_MODE=simulate|sim` demo choice.
+    ExplicitDemoModeRequired,
+}
+
+impl std::fmt::Display for FnnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExplicitDemoModeRequired => write!(
+                f,
+                "Explicit demo mode required: set FNN_MODE=simulate, or FNN_MODE=testnet with live FNN on :8227"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FnnError {}
+
+impl From<FnnError> for String {
+    fn from(value: FnnError) -> Self {
+        value.to_string()
+    }
+}
+
+/// Resolve the FNN backend for this agent.
+///
+/// - Default / `FNN_MODE=testnet|live` → probe local sidecar; **panic** if unreachable
+/// - `FNN_MODE=simulate|sim` → in-process [`SimulatedFnnClient`] (explicit demo only)
+/// - anything else → [`FnnError::ExplicitDemoModeRequired`]
+///
+/// Never silently falls back to simulation when operators expect live/testnet.
 pub async fn resolve_fnn_backend(
     agent_id: u16,
     rpc_url: &str,
-) -> Box<dyn FiberNodeRpc + Send + Sync> {
-    let mode = env::var("FNN_MODE").unwrap_or_default();
-    if mode.eq_ignore_ascii_case("simulate") || mode.eq_ignore_ascii_case("sim") {
+) -> Result<Box<dyn FiberNodeRpc + Send + Sync>, FnnError> {
+    let mode = env::var("FNN_MODE").unwrap_or_else(|_| "testnet".to_string());
+    let mode_l = mode.to_ascii_lowercase();
+
+    if mode_l == "simulate" || mode_l == "sim" {
         println!("🧪 [FNN] Simulation mode enabled (FNN_MODE={mode})");
-        return Box::new(SimulatedFnnClient::new(agent_id));
+        return Ok(Box::new(SimulatedFnnClient::new(agent_id)));
     }
 
-    let live = LiveFnnClient::new(rpc_url.to_string());
-    match live.list_channels().await {
-        Ok(_) => {
-            println!("🔗 [FNN] Live RPC connected at {rpc_url}");
-            Box::new(live)
-        }
-        Err(e) => {
-            eprintln!("⚠️ [FNN] Daemon not reachable at {rpc_url} — using simulated channels");
-            eprintln!("   Reason: {e}");
-            eprintln!("   Tip: start your FNN node, or set FNN_MODE=simulate for local dev");
-            Box::new(SimulatedFnnClient::new(agent_id))
+    if mode_l == "testnet" || mode_l == "live" {
+        // Probe the local sidecar port (caller may override via FNN_RPC_URL / rpc_url).
+        let probe_url = if rpc_url.trim().is_empty() {
+            "http://127.0.0.1:8227".to_string()
+        } else {
+            rpc_url.to_string()
+        };
+        let client = LiveFnnClient::new(probe_url.clone());
+        match client.ping().await {
+            Ok(()) => {
+                println!("🔗 [FNN] Live RPC connected at {probe_url}");
+                return Ok(Box::new(client));
+            }
+            Err(e) => {
+                // DO NOT degrade to SimulatedFnnClient. Force a hard panic.
+                panic!(
+                    "CRITICAL: Live FNN Node failed to bind to port 8227. Network connection severed. Error: {e}"
+                );
+            }
         }
     }
+
+    // Explicit demo mode must be chosen manually (`FNN_MODE=simulate`).
+    Err(FnnError::ExplicitDemoModeRequired)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn fnn_mode_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[tokio::test]
+    async fn resolve_fnn_backend_panics_when_live_unreachable() {
+        let _guard = fnn_mode_lock().lock().expect("fnn mode lock");
+        let prev = env::var("FNN_MODE").ok();
+        env::set_var("FNN_MODE", "testnet");
+        let join = tokio::spawn(async { resolve_fnn_backend(44, "http://127.0.0.1:1").await });
+        let join_err = match join.await {
+            Err(err) if err.is_panic() => err,
+            Ok(Ok(_)) => panic!("must not silently connect or simulate"),
+            Ok(Err(err)) => panic!("must panic, not return Err: {err}"),
+            Err(err) => panic!("unexpected join failure: {err}"),
+        };
+        let payload = join_err.into_panic();
+        let message = if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else {
+            format!("{payload:?}")
+        };
+        assert!(
+            message.contains("CRITICAL: Live FNN Node failed to bind to port 8227"),
+            "unexpected panic payload: {message}"
+        );
+        match prev {
+            Some(value) => env::set_var("FNN_MODE", value),
+            None => env::remove_var("FNN_MODE"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_fnn_backend_rejects_unknown_mode() {
+        let _guard = fnn_mode_lock().lock().expect("fnn mode lock");
+        let prev = env::var("FNN_MODE").ok();
+        env::set_var("FNN_MODE", "staging");
+        let err = match resolve_fnn_backend(44, "http://127.0.0.1:1").await {
+            Ok(_) => panic!("unknown mode must require explicit demo"),
+            Err(err) => err,
+        };
+        assert_eq!(err, FnnError::ExplicitDemoModeRequired);
+        match prev {
+            Some(value) => env::set_var("FNN_MODE", value),
+            None => env::remove_var("FNN_MODE"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_fnn_backend_allows_explicit_simulate() {
+        let _guard = fnn_mode_lock().lock().expect("fnn mode lock");
+        let prev = env::var("FNN_MODE").ok();
+        env::set_var("FNN_MODE", "simulate");
+        let backend = resolve_fnn_backend(44, "http://127.0.0.1:1")
+            .await
+            .expect("simulate must succeed without live RPC");
+        let _ = backend.node_pubkey().await;
+        match prev {
+            Some(value) => env::set_var("FNN_MODE", value),
+            None => env::remove_var("FNN_MODE"),
+        }
+    }
 
     #[test]
     fn agent_fnn_pubkey_is_secp256k1_hex() {

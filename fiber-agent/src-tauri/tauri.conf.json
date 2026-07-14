@@ -22,7 +22,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "externalBin": [
+      "binaries/fnn"
+    ],
     "icon": [
       "icons/icon.ico"
     ]

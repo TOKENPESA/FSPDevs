@@ -2635,3 +2635,104 @@ button.btn-loan {
     padding: 14px 12px;
   }
 }
+
+/* Un-dismissible FNN fatal gate — live/testnet required */
+body.fnn-fatal-locked {
+  overflow: hidden;
+}
+
+.fnn-fatal-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(248, 113, 113, 0.18), transparent 55%),
+    rgba(10, 25, 47, 0.94);
+  pointer-events: all;
+}
+
+.fnn-fatal-card {
+  width: min(560px, 100%);
+  padding: 28px 28px 24px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 12px;
+  background: #0f1c2e;
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.fnn-fatal-kicker {
+  margin: 0 0 8px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: #fca5a5;
+}
+
+.fnn-fatal-card h1 {
+  margin: 0 0 12px;
+  font-size: clamp(1.15rem, 2.4vw, 1.45rem);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-snug);
+  color: #fff;
+}
+
+.fnn-fatal-lead {
+  margin: 0 0 18px;
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: #cbd5e1;
+}
+
+.fnn-fatal-meta {
+  margin: 0 0 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.fnn-fatal-meta div {
+  display: grid;
+  gap: 2px;
+}
+
+.fnn-fatal-meta dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: #94a3b8;
+}
+
+.fnn-fatal-meta dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: #fecaca;
+  word-break: break-word;
+}
+
+.fnn-fatal-steps {
+  margin: 0 0 14px;
+  padding-left: 1.2rem;
+  color: #e2e8f0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.fnn-fatal-steps code,
+.fnn-fatal-lead code,
+.fnn-fatal-foot code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: #fde68a;
+}
+
+.fnn-fatal-foot {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: #94a3b8;
+}

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11,6 +12,44 @@ use uuid::Uuid;
 use crate::mesh::{mesh_neighbor_ids, shannons_to_hex, DEFAULT_OPEN_CHANNEL_SHANNONS};
 use mesh_core::types::{AssetCapacity, L2Asset};
 use crate::{agent_fnn_pubkey, peer_id_from_agent_pubkey, MeshChannelState};
+
+/// Default Fiber final TLC expiry delta (4 hours), matching testnet channel defaults.
+pub const DEFAULT_CLTV_EXPIRY_DELTA_MS: u64 = 14_400_000;
+
+/// Loads `FNN_BISCUIT_TOKEN` for Fiber RPC Bearer auth (required in production custody).
+pub fn resolve_fnn_biscuit_token() -> Option<String> {
+    match std::env::var("FNN_BISCUIT_TOKEN") {
+        Ok(token) => {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+fn bearer_headers(biscuit_token: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(token) = biscuit_token {
+        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(AUTHORIZATION, value);
+        }
+    }
+    headers
+}
+
+/// Arguments for native Fiber `send_payment` multi-hop HTLC dispatch.
+#[derive(Debug, Clone)]
+pub struct SendHtlcPaymentArgs {
+    pub target_pubkey: String,
+    pub amount_shannons: u64,
+    pub payment_hash: Option<String>,
+    pub route_hops: Vec<String>,
+    pub cltv_expiry_delta: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RgbCellCapacity {
@@ -106,6 +145,9 @@ pub trait FiberNodeRpc: Send + Sync {
         amount: u64,
     ) -> Result<PaymentResult, String>;
 
+    /// Dispatches a multi-hop HTLC via Fiber `send_payment` (trampoline hops + CLTV).
+    async fn send_htlc_payment(&self, args: SendHtlcPaymentArgs) -> Result<PaymentResult, String>;
+
     /// Queries RGB++ isomorphic cell capacity for a given type hash on CKB.
     async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String>;
 
@@ -154,6 +196,10 @@ impl FiberNodeRpc for ArcFnnBackend {
         self.0.send_keysend_payment(target_pubkey, amount).await
     }
 
+    async fn send_htlc_payment(&self, args: SendHtlcPaymentArgs) -> Result<PaymentResult, String> {
+        self.0.send_htlc_payment(args).await
+    }
+
     async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
         self.0.get_rgb_cell_capacity(cell_type_hash).await
     }
@@ -167,6 +213,7 @@ impl FiberNodeRpc for ArcFnnBackend {
 pub struct LiveFnnClient {
     rpc_url: String,
     http_client: Client,
+    biscuit_token: Option<String>,
     local_pubkey: Arc<RwLock<Option<String>>>,
 }
 
@@ -178,14 +225,72 @@ pub struct SimulatedFnnClient {
 
 impl LiveFnnClient {
     pub fn new(rpc_url: String) -> Self {
+        Self::with_biscuit_token(rpc_url, resolve_fnn_biscuit_token())
+    }
+
+    pub fn with_biscuit_token(rpc_url: String, biscuit_token: Option<String>) -> Self {
         Self {
             rpc_url,
             http_client: Client::builder()
                 .timeout(Duration::from_secs(10))
+                .default_headers(bearer_headers(biscuit_token.as_deref()))
                 .build()
                 .expect("Failed to build FNN HTTP client"),
+            biscuit_token,
             local_pubkey: Arc::new(RwLock::new(None)),
         }
+    }
+
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.biscuit_token.as_deref() {
+            Some(token) => request.header(AUTHORIZATION, format!("Bearer {token}")),
+            None => request,
+        }
+    }
+
+    pub(crate) fn build_send_payment_params(args: &SendHtlcPaymentArgs) -> Value {
+        let trampoline_hops: Vec<String> = args
+            .route_hops
+            .iter()
+            .map(|hop| hop.trim().to_string())
+            .filter(|hop| !hop.is_empty() && hop != &args.target_pubkey)
+            .collect();
+
+        let cltv = if args.cltv_expiry_delta == 0 {
+            DEFAULT_CLTV_EXPIRY_DELTA_MS
+        } else {
+            args.cltv_expiry_delta
+        };
+
+        let mut params = serde_json::json!({
+            "target_pubkey": args.target_pubkey,
+            "amount": shannons_to_hex(args.amount_shannons),
+            "final_tlc_expiry_delta": cltv,
+        });
+
+        if let Some(hash) = args.payment_hash.as_deref().map(str::trim).filter(|h| !h.is_empty())
+        {
+            let normalized = if hash.starts_with("0x") || hash.starts_with("0X") {
+                hash.to_string()
+            } else {
+                format!("0x{hash}")
+            };
+            params["payment_hash"] = Value::String(normalized);
+            params["keysend"] = Value::Bool(false);
+        } else {
+            params["keysend"] = Value::Bool(true);
+        }
+
+        if !trampoline_hops.is_empty() {
+            params["trampoline_hops"] = Value::Array(
+                trampoline_hops
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            );
+        }
+
+        params
     }
 
     pub(crate) async fn call_rpc(&self, method: &str, params: Value) -> Result<Value, String> {
@@ -197,8 +302,7 @@ impl LiveFnnClient {
         };
 
         let response = self
-            .http_client
-            .post(&self.rpc_url)
+            .authorize(self.http_client.post(&self.rpc_url))
             .json(&payload)
             .send()
             .await
@@ -225,8 +329,7 @@ impl LiveFnnClient {
     /// Posts a raw JSON-RPC envelope (used by the mobile-money float bridge).
     pub async fn call_fnn_rpc(&self, payload: Value) -> Result<Value, String> {
         let response = self
-            .http_client
-            .post(&self.rpc_url)
+            .authorize(self.http_client.post(&self.rpc_url))
             .json(&payload)
             .send()
             .await
@@ -243,6 +346,43 @@ impl LiveFnnClient {
             .json::<Value>()
             .await
             .map_err(|e| format!("FNN JSON parse error: {e}"))
+    }
+
+    async fn poll_payment_result(
+        &self,
+        payment_hash: &str,
+        initial_status: String,
+        initial_fee: u64,
+    ) -> Result<PaymentResult, String> {
+        let mut final_status = initial_status;
+        let mut final_fee = initial_fee;
+        for _ in 0..20 {
+            if final_status.eq_ignore_ascii_case("Success")
+                || final_status.eq_ignore_ascii_case("Failed")
+                || final_status.eq_ignore_ascii_case("Settled")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let payment = self
+                .call_rpc(
+                    "get_payment",
+                    serde_json::json!([{ "payment_hash": payment_hash }]),
+                )
+                .await?;
+            final_status = payment
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&final_status)
+                .to_string();
+            final_fee = Self::parse_balance_shannons(payment.get("fee"));
+        }
+
+        Ok(PaymentResult {
+            payment_hash: payment_hash.to_string(),
+            status: final_status,
+            fee_shannons: final_fee,
+        })
     }
 
     /// Returns true when FNN reports the payment hash as successfully settled.
@@ -467,6 +607,61 @@ impl SimulatedFnnClient {
             channels: Arc::new(RwLock::new(channels)),
         }
     }
+
+    async fn send_direct_simulated(
+        &self,
+        args: &SendHtlcPaymentArgs,
+    ) -> Result<PaymentResult, String> {
+        let target_pubkey = args.target_pubkey.as_str();
+        let amount = args.amount_shannons;
+        let peer_id = peer_id_from_agent_pubkey(target_pubkey)
+            .unwrap_or_else(|| LiveFnnClient::pubkey_to_peer_stub(target_pubkey));
+        let fee_shannons = 1_000u64;
+        let total = amount.saturating_add(fee_shannons);
+
+        let mut channels = self.channels.write().await;
+        let channel_idx = channels
+            .iter()
+            .position(|c| c.is_active && c.peer_id == peer_id)
+            .or_else(|| {
+                channels.iter().position(|c| {
+                    c.is_active && c.peer_pubkey.as_deref() == Some(target_pubkey)
+                })
+            })
+            .ok_or_else(|| {
+                format!("no active simulated channel toward FA-{peer_id} ({target_pubkey})")
+            })?;
+
+        let channel = &mut channels[channel_idx];
+
+        if channel.local_balance_shannons < total {
+            return Err(format!(
+                "insufficient outbound balance: have {} need {total} shannons",
+                channel.local_balance_shannons
+            ));
+        }
+
+        channel.local_balance_shannons -= total;
+        channel.remote_balance_shannons += amount;
+
+        let payment_hash = args.payment_hash.clone().unwrap_or_else(|| {
+            format!(
+                "sim-pay-{}-{}-{}",
+                self.agent_id,
+                peer_id,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            )
+        });
+
+        Ok(PaymentResult {
+            payment_hash,
+            status: "Success".to_string(),
+            fee_shannons,
+        })
+    }
 }
 
 #[async_trait]
@@ -500,26 +695,6 @@ impl FiberNodeRpc for SimulatedFnnClient {
                         "payment_hash": mock_hash,
                         "preimage": mock_preimage,
                         "status": "Settled"
-                    },
-                    "id": payload.get("id").unwrap_or(&serde_json::json!(1))
-                }))
-            }
-            "send_multi_hop_payment" => {
-                log::info!(
-                    "🧪 [MOCK FNN] Simulating multi-hop HTLC dispatch for FA-{}",
-                    self.agent_id
-                );
-                let mock_preimage = format!(
-                    "mock-mh-preimage-{}",
-                    Uuid::new_v4().to_string().replace('-', "")
-                );
-
-                Ok(serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "result": {
-                        "payment_preimage": mock_preimage,
-                        "status": "SUCCESS",
-                        "failure_reason": null
                     },
                     "id": payload.get("id").unwrap_or(&serde_json::json!(1))
                 }))
@@ -589,51 +764,45 @@ impl FiberNodeRpc for SimulatedFnnClient {
         target_pubkey: &str,
         amount: u64,
     ) -> Result<PaymentResult, String> {
-        let peer_id = peer_id_from_agent_pubkey(target_pubkey)
-            .unwrap_or_else(|| LiveFnnClient::pubkey_to_peer_stub(target_pubkey));
-        let fee_shannons = 1_000u64;
-        let total = amount.saturating_add(fee_shannons);
+        self.send_htlc_payment(SendHtlcPaymentArgs {
+            target_pubkey: target_pubkey.to_string(),
+            amount_shannons: amount,
+            payment_hash: None,
+            route_hops: Vec::new(),
+            cltv_expiry_delta: DEFAULT_CLTV_EXPIRY_DELTA_MS,
+        })
+        .await
+    }
 
-        let mut channels = self.channels.write().await;
-        let channel_idx = channels
-            .iter()
-            .position(|c| c.is_active && c.peer_id == peer_id)
-            .or_else(|| {
-                channels.iter().position(|c| {
-                    c.is_active && c.peer_pubkey.as_deref() == Some(target_pubkey)
-                })
-            })
-            .ok_or_else(|| {
-                format!("no active simulated channel toward FA-{peer_id} ({target_pubkey})")
-            })?;
-
-        let channel = &mut channels[channel_idx];
-
-        if channel.local_balance_shannons < total {
-            return Err(format!(
-                "insufficient outbound balance: have {} need {total} shannons",
-                channel.local_balance_shannons
-            ));
+    async fn send_htlc_payment(&self, args: SendHtlcPaymentArgs) -> Result<PaymentResult, String> {
+        if args.route_hops.is_empty() {
+            return SimulatedFnnClient::send_direct_simulated(self, &args).await;
         }
 
-        channel.local_balance_shannons -= total;
-        channel.remote_balance_shannons += amount;
+        // Multi-hop: settle against the first outbound hop while recording the full route.
+        let first_hop = args
+            .route_hops
+            .iter()
+            .map(|hop| hop.trim())
+            .find(|hop| !hop.is_empty())
+            .unwrap_or(args.target_pubkey.as_str());
 
-        let payment_hash = format!(
-            "sim-pay-{}-{}-{}",
-            self.agent_id,
-            peer_id,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0)
-        );
+        let mut result = SimulatedFnnClient::send_direct_simulated(
+            self,
+            &SendHtlcPaymentArgs {
+                target_pubkey: first_hop.to_string(),
+                amount_shannons: args.amount_shannons,
+                payment_hash: args.payment_hash.clone(),
+                route_hops: Vec::new(),
+                cltv_expiry_delta: args.cltv_expiry_delta,
+            },
+        )
+        .await?;
 
-        Ok(PaymentResult {
-            payment_hash,
-            status: "Success".to_string(),
-            fee_shannons,
-        })
+        if let Some(hash) = args.payment_hash {
+            result.payment_hash = hash;
+        }
+        Ok(result)
     }
 
     async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
@@ -747,15 +916,20 @@ impl FiberNodeRpc for LiveFnnClient {
         target_pubkey: &str,
         amount: u64,
     ) -> Result<PaymentResult, String> {
+        self.send_htlc_payment(SendHtlcPaymentArgs {
+            target_pubkey: target_pubkey.to_string(),
+            amount_shannons: amount,
+            payment_hash: None,
+            route_hops: Vec::new(),
+            cltv_expiry_delta: DEFAULT_CLTV_EXPIRY_DELTA_MS,
+        })
+        .await
+    }
+
+    async fn send_htlc_payment(&self, args: SendHtlcPaymentArgs) -> Result<PaymentResult, String> {
+        let params = LiveFnnClient::build_send_payment_params(&args);
         let result = self
-            .call_rpc(
-                "send_payment",
-                serde_json::json!([{
-                    "target_pubkey": target_pubkey,
-                    "amount": shannons_to_hex(amount),
-                    "keysend": true
-                }]),
-            )
+            .call_rpc("send_payment", serde_json::json!([params]))
             .await?;
 
         let payment_hash = result
@@ -774,34 +948,8 @@ impl FiberNodeRpc for LiveFnnClient {
             return Err(format!("send_payment missing payment_hash: {result}"));
         }
 
-        let mut final_status = status;
-        let mut final_fee = fee_shannons;
-        for _ in 0..20 {
-            if final_status.eq_ignore_ascii_case("Success")
-                || final_status.eq_ignore_ascii_case("Failed")
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let payment = self
-                .call_rpc(
-                    "get_payment",
-                    serde_json::json!([{ "payment_hash": payment_hash }]),
-                )
-                .await?;
-            final_status = payment
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&final_status)
-                .to_string();
-            final_fee = Self::parse_balance_shannons(payment.get("fee"));
-        }
-
-        Ok(PaymentResult {
-            payment_hash,
-            status: final_status,
-            fee_shannons: final_fee,
-        })
+        self.poll_payment_result(&payment_hash, status, fee_shannons)
+            .await
     }
 
     async fn get_rgb_cell_capacity(&self, cell_type_hash: &str) -> Result<RgbCellCapacity, String> {
@@ -818,6 +966,23 @@ mod tests {
     use super::*;
     use crate::mesh::chord_peer;
     use serde_json::json;
+
+    #[test]
+    fn build_send_payment_params_maps_multihop_htlc_fields() {
+        let params = LiveFnnClient::build_send_payment_params(&SendHtlcPaymentArgs {
+            target_pubkey: "03dest".into(),
+            amount_shannons: 1_000_000,
+            payment_hash: Some("aabb".into()),
+            route_hops: vec!["03hop1".into(), "03dest".into()],
+            cltv_expiry_delta: 14_400_000,
+        });
+
+        assert_eq!(params["target_pubkey"], "03dest");
+        assert_eq!(params["payment_hash"], "0xaabb");
+        assert_eq!(params["keysend"], false);
+        assert_eq!(params["final_tlc_expiry_delta"], 14_400_000);
+        assert_eq!(params["trampoline_hops"], json!(["03hop1"]));
+    }
 
     #[test]
     fn pubkey_to_peer_stub_uses_digits_when_present() {

@@ -4,10 +4,13 @@ import {
   PAYMENT_SETTLE_DISPLAY_MS,
   PAYMENT_TRAVEL_CAP,
 } from "../config.js";
+import { safeUserMessage } from "../dom-security.js";
 import { formatShannons } from "../format.js";
+import { createLogger } from "../logger.js";
 import {
   logEvent,
   markDirty,
+  markRouteBlacklist,
   nodeX,
   nodeY,
   resolveNodeBalances,
@@ -17,6 +20,7 @@ import {
 } from "../state.js";
 import { nodeStatus, updateTooltip } from "../canvas/tooltip.js";
 
+const log = createLogger("payment-events");
 const metricRoute = document.getElementById("metric-route");
 const metricHover = document.getElementById("metric-hover");
 
@@ -82,14 +86,80 @@ export function startPaymentTransfer(path, source, destination, amount) {
     startedAt: performance.now(),
     settledAt: null,
     clearTimer: null,
+    bottleneck: null,
+    failReason: null,
   };
   state.activeRoute = [...path];
   if (metricRoute) metricRoute.textContent = "in flight…";
   markDirty();
 }
 
-/** @param {boolean} success @param {number} [fee] */
-export function settlePaymentTransfer(success, fee = 0) {
+/**
+ * Detect pathfind / TemporaryNodeFailure feedback and extract blacklist hops.
+ * @param {Record<string, unknown>} payload
+ * @returns {{ hops: Array<{ a: number, b: number, bottleneck: number }>, reason: string } | null}
+ */
+export function extractPathfindBlacklist(payload) {
+  const reason = safeUserMessage(payload.reason ?? payload.error ?? payload.payment_error, "");
+  if (!reason) return null;
+
+  const isPathFail = /TemporaryNodeFailure|no path|PathFind|max_fee_amount is too low|Failed to build route/i
+    .test(reason);
+  if (!isPathFail) return null;
+
+  /** @type {number[]} */
+  const path = Array.isArray(payload.path)
+    ? payload.path.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  const source = Number(payload.source);
+  const destination = Number(payload.destination);
+
+  /** @type {number[]} */
+  const mentioned = [];
+  for (const match of reason.matchAll(/FA-(\d+)/gi)) {
+    const id = Number(match[1]);
+    if (Number.isFinite(id) && id > 0) mentioned.push(id);
+  }
+
+  /** @type {Array<{ a: number, b: number, bottleneck: number }>} */
+  const hops = [];
+  if (path.length >= 2) {
+    for (let i = 0; i < path.length - 1; i++) {
+      hops.push({
+        a: path[i],
+        b: path[i + 1],
+        bottleneck: path[i + 1],
+      });
+    }
+  } else if (Number.isFinite(source) && Number.isFinite(destination) && source > 0 && destination > 0) {
+    hops.push({ a: source, b: destination, bottleneck: destination });
+  }
+
+  if (mentioned.length > 0 && hops.length > 0) {
+    const bottleneck = mentioned[mentioned.length - 1];
+    for (const hop of hops) {
+      if (hop.a === bottleneck || hop.b === bottleneck) {
+        hop.bottleneck = bottleneck;
+      }
+    }
+  }
+
+  // Prefer the first intermediate as bottleneck for TemporaryNodeFailure.
+  if (/TemporaryNodeFailure/i.test(reason) && path.length >= 2) {
+    const idx = Math.min(1, path.length - 1);
+    const bottleneck = path[idx];
+    for (const hop of hops) {
+      if (hop.a === path[0] && hop.b === path[1]) {
+        hop.bottleneck = bottleneck;
+      }
+    }
+  }
+
+  return hops.length > 0 ? { hops, reason } : { hops: [], reason };
+}
+
+/** @param {boolean} success @param {number} [fee] @param {{ bottleneck?: number | null, failReason?: string | null }} [failMeta] */
+export function settlePaymentTransfer(success, fee = 0, failMeta = {}) {
   const pt = state.paymentTransfer;
   if (!pt || pt.phase === "settled" || pt.phase === "failed") return;
 
@@ -107,7 +177,13 @@ export function settlePaymentTransfer(success, fee = 0) {
         "heal",
       );
     } else {
-      if (metricRoute) metricRoute.textContent = "payment failed";
+      current.bottleneck = failMeta.bottleneck ?? current.bottleneck ?? current.path[1] ?? current.destination;
+      current.failReason = failMeta.failReason ?? current.failReason;
+      if (metricRoute) {
+        metricRoute.textContent = current.bottleneck
+          ? `blocked @ FA-${current.bottleneck}`
+          : "payment failed";
+      }
     }
 
     current.clearTimer = setTimeout(() => {
@@ -185,12 +261,44 @@ export function handlePaymentEvent(payload) {
     settlePaymentTransfer(true, Number(payload.fee_shannons ?? 0));
     return true;
   }
-  if (payload.event === "PAYMENT_FAILED") {
-    if (state.paymentTransfer) {
-      settlePaymentTransfer(false);
+  if (payload.event === "PAYMENT_FAILED" || payload.event === "payment_failed") {
+    const blacklist = extractPathfindBlacklist(payload);
+    const safeReason = safeUserMessage(
+      payload.reason ?? payload.error ?? "unknown",
+      "payment failed",
+    );
+
+    if (blacklist) {
+      for (const hop of blacklist.hops) {
+        markRouteBlacklist(hop.a, hop.b, hop.bottleneck, blacklist.reason);
+      }
+      if (blacklist.hops.length > 0) {
+        const nodes = [...new Set(blacklist.hops.flatMap((h) => [h.a, h.b, h.bottleneck]))];
+        log.info("pathfind blacklist applied", { nodes, reason: blacklist.reason });
+      }
     }
+
+    if (!state.paymentTransfer && Array.isArray(payload.path) && payload.path.length >= 2) {
+      startPaymentTransfer(
+        payload.path.map(Number),
+        Number(payload.source),
+        Number(payload.destination),
+        Number(payload.amount_shannons ?? 0),
+      );
+    }
+
+    const bottleneck = blacklist?.hops[0]?.bottleneck
+      ?? (Array.isArray(payload.path) && payload.path.length > 1
+        ? Number(payload.path[1])
+        : Number(payload.destination))
+      ?? null;
+
+    if (state.paymentTransfer) {
+      settlePaymentTransfer(false, 0, { bottleneck, failReason: safeReason });
+    }
+
     logEvent(
-      `PAYMENT failed: FA-${payload.source} → FA-${payload.destination} — ${payload.reason || "unknown"}`,
+      `PAYMENT failed: FA-${payload.source} → FA-${payload.destination} — ${safeReason}`,
       "warn",
     );
     return true;

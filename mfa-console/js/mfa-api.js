@@ -7,6 +7,7 @@ import {
   MFA_SURVEILLANCE_URL,
   mfaAuthHeaders,
   mfaAuthedUrl,
+  mfaMonitorWsUrl,
 } from "../../dashboard/config.js";
 import { fetchWithTimeout } from "../../dashboard/fetch-timeout.js";
 
@@ -17,6 +18,7 @@ export {
   MFA_ROUTE_URL,
   mfaAuthHeaders,
   mfaAuthedUrl,
+  mfaMonitorWsUrl,
 };
 
 export async function fetchMfaHealth(timeoutMs = 5000) {
@@ -105,5 +107,5 @@ export function complianceStreamUrl(ticket) {
 }
 
 export function monitorWebSocketUrl() {
-  return mfaAuthedUrl("ws://127.0.0.1:1025/ws/monitor");
+  return mfaMonitorWsUrl();
 }

@@ -1,4 +1,10 @@
 import { createLogger } from "../../dashboard/logger.js";
+import {
+  mfaDisplayHost,
+  mfaMonitorWsBaseUrl,
+  seedMfaApiTokenFromQuery,
+} from "../../dashboard/config.js";
+import { parkMeshCanvas } from "./mesh-canvas.js";
 import { escapeHtml, safeUserMessage } from "./dom-security.js";
 import { MFA_MODULES } from "./module-registry.js";
 import { navIcon } from "./icons.js";
@@ -7,6 +13,16 @@ import { connectMonitor } from "../../dashboard/events/monitor.js";
 import { startMeshHintWatcher, tryAutoConnectMonitor } from "./monitor-bridge.js";
 
 const log = createLogger("mfa-ui");
+
+seedMfaApiTokenFromQuery();
+parkMeshCanvas();
+
+const brandSubtitle = document.getElementById("brand-subtitle");
+if (brandSubtitle) brandSubtitle.textContent = mfaDisplayHost();
+const mfaWsInput = document.getElementById("mfa-ws");
+if (mfaWsInput instanceof HTMLInputElement) {
+  mfaWsInput.value = mfaMonitorWsBaseUrl();
+}
 
 const contentEl = document.getElementById("main-content");
 const navEl = document.getElementById("sidebar-nav");

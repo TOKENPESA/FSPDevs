@@ -86,6 +86,8 @@
  * @property {number} startedAt
  * @property {number | null} settledAt
  * @property {ReturnType<typeof setTimeout> | null} clearTimer
+ * @property {number | null} [bottleneck]
+ * @property {string | null} [failReason]
  */
 
 /**
@@ -152,6 +154,25 @@
  * @property {LiquidityState} liquidity
  * @property {CommState} comm
  * @property {Map<number, NodeVisualMeta>} nodeVisual
+ * @property {Map<string, ChannelEdgeMeta>} channelEdges
+ * @property {Map<string, RouteBlacklistMeta>} routeBlacklist
+ */
+
+/**
+ * @typedef {Object} ChannelEdgeMeta
+ * @property {number} a
+ * @property {number} b
+ * @property {number} capacityShannons
+ * @property {number} at
+ */
+
+/**
+ * @typedef {Object} RouteBlacklistMeta
+ * @property {number} a
+ * @property {number} b
+ * @property {number} bottleneck
+ * @property {string} reason
+ * @property {number} at
  */
 
 /**

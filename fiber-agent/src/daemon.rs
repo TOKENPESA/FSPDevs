@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::hot_swap::execute_hot_swap;
+use crate::mfa_ws_auth::{inject_agent_ws_auth_headers, mfa_control_ws_url, mfa_http_base};
 use crate::payment::execute_mesh_payment;
 use crate::power::{AdaptivePowerController, PowerProfile};
 use crate::utility_runtime::UtilityRuntime;
@@ -88,12 +89,9 @@ async fn resolve_backend(
 
 /// Runs one Fiber Agent sidecar loop (MFA WS + telemetry + FNN poll) until the task is cancelled.
 pub async fn run_agent_sidecar(agent_id: u16, config: SidecarConfig) {
-    let mfa_telemetry_url = format!("http://{}/telemetry", config.mfa_host);
+    let mfa_telemetry_url = format!("{}/telemetry", mfa_http_base(&config.mfa_host));
     let ws_token = config.ws_token.clone();
-    let mfa_ws_url = format!(
-        "ws://{}/ws/{agent_id}?token={ws_token}",
-        config.mfa_host
-    );
+    let mfa_ws_url = mfa_control_ws_url(agent_id, &config.mfa_host);
     let local_fnn_rpc = resolve_fnn_rpc_url(agent_id);
     let quiet = config.quiet;
 
@@ -165,6 +163,7 @@ pub async fn run_agent_sidecar(agent_id: u16, config: SidecarConfig) {
     spawn_mfa_control_ws(
         agent_id,
         mfa_ws_url,
+        ws_token,
         fnn_backend.clone(),
         pubkey_cache.clone(),
         mesh_registry.clone(),
@@ -198,10 +197,7 @@ pub fn spawn_sidecar_mfa_control_ws(
     sys_broadcast_rx: Option<mpsc::Receiver<String>>,
 ) {
     let config = SidecarConfig::from_env();
-    let mfa_ws_url = format!(
-        "ws://{}/ws/{agent_id}?token={}",
-        config.mfa_host, config.ws_token
-    );
+    let mfa_ws_url = mfa_control_ws_url(agent_id, &config.mfa_host);
     let fnn_backend = Arc::new(Mutex::new(
         Box::new(ArcFnnBackend(fnn_client)) as Box<dyn FiberNodeRpc + Send + Sync>
     ));
@@ -210,6 +206,7 @@ pub fn spawn_sidecar_mfa_control_ws(
     spawn_mfa_control_ws(
         agent_id,
         mfa_ws_url,
+        config.ws_token,
         fnn_backend,
         pubkey_cache,
         mesh_registry,
@@ -224,6 +221,7 @@ pub fn spawn_sidecar_mfa_control_ws(
 pub fn spawn_mfa_control_ws(
     agent_id: u16,
     mfa_ws_url: String,
+    ws_token: String,
     fnn_backend: Arc<Mutex<Box<dyn FiberNodeRpc + Send + Sync>>>,
     pubkey_cache: Arc<RwLock<HashMap<u16, String>>>,
     mesh_registry: Arc<MeshPubkeyRegistry>,
@@ -270,6 +268,13 @@ pub fn spawn_mfa_control_ws(
                     continue;
                 }
             };
+            if let Err(err) =
+                inject_agent_ws_auth_headers(request.headers_mut(), agent_id, &ws_token)
+            {
+                log_agent_err(quiet, agent_id, &format!("WS auth header build failed: {err}"));
+                sleep(Duration::from_secs(5)).await;
+                continue;
+            }
             let _ = request.headers_mut().insert(
                 "Origin",
                 "http://127.0.0.1:8088".parse().unwrap(),

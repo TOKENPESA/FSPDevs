@@ -9,6 +9,7 @@ import { renderModulePage } from "./panel-shell.js";
 import { loadSidecarRuntime } from "./sidecar-runtime.js";
 import { icon, navIcon } from "./icons.js";
 import appStoreModule from "./modules/app-store/index.js";
+import fundingModule from "./modules/funding/index.js";
 import { modulesForMounted } from "./module-registry.js";
 
 /** @typedef {import("../../../../dashboard/types.js").SidecarModule} SidecarModule */
@@ -412,6 +413,7 @@ export class SidecarUiHost {
   }
 
   async boot() {
+    this.ensureRegistered(fundingModule);
     this.ensureRegistered(appStoreModule);
     initShell();
     if (this.navEl) initNavSearch(this.navEl);

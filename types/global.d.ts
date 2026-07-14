@@ -10,9 +10,14 @@ interface TauriEventApi {
   ): Promise<() => void>;
 }
 
+interface TauriShellApi {
+  open(url: string): Promise<void>;
+}
+
 interface TauriGlobal {
   core?: TauriInvokeCore;
   event?: TauriEventApi;
+  shell?: TauriShellApi;
 }
 
 declare global {

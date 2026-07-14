@@ -23,6 +23,18 @@ CREATE TABLE IF NOT EXISTS mfa_registry_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_telemetry_nonces (
+    agent_id INTEGER PRIMARY KEY NOT NULL,
+    high_water_mark INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS registered_agents (
+    agent_id INTEGER PRIMARY KEY NOT NULL,
+    agent_secret TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +78,11 @@ fn migrate_mfa_registry_meta(conn: &Connection) -> SqliteResult<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS agent_telemetry_nonces (
+            agent_id INTEGER PRIMARY KEY NOT NULL,
+            high_water_mark INTEGER NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         "#,
     )?;
 
@@ -86,7 +103,40 @@ fn migrate_mfa_registry_meta(conn: &Connection) -> SqliteResult<()> {
         }
         conn.pragma_update(None, "user_version", 2)?;
     }
+    let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if user_version < 3 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS agent_telemetry_nonces (
+                agent_id INTEGER PRIMARY KEY NOT NULL,
+                high_water_mark INTEGER NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
+    let user_version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if user_version < 4 {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS registered_agents (
+                agent_id INTEGER PRIMARY KEY NOT NULL,
+                agent_secret TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisteredAgentRecord {
+    pub agent_id: u16,
+    pub agent_secret: String,
+    pub created_at: String,
 }
 
 #[derive(Debug)]
@@ -234,6 +284,114 @@ impl MfaModuleStore {
         Ok(())
     }
 
+    /// Loads all persisted telemetry nonce high-water marks (agent_id → HWM).
+    pub fn load_telemetry_nonces(&self) -> Result<std::collections::HashMap<u16, u64>, String> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT agent_id, high_water_mark FROM agent_telemetry_nonces ORDER BY agent_id",
+            )
+            .map_err(|err| sanitize_storage_error("prepare telemetry nonces", err))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let agent_id: i64 = row.get(0)?;
+                let hwm: i64 = row.get(1)?;
+                Ok((agent_id as u16, hwm as u64))
+            })
+            .map_err(|err| sanitize_storage_error("query telemetry nonces", err))?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (agent_id, hwm) =
+                row.map_err(|err| sanitize_storage_error("read telemetry nonce row", err))?;
+            map.insert(agent_id, hwm);
+        }
+        Ok(map)
+    }
+
+    /// Upserts a single agent's telemetry nonce high-water mark.
+    pub fn upsert_telemetry_nonce(&self, agent_id: u16, high_water_mark: u64) -> Result<(), String> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            r#"
+            INSERT INTO agent_telemetry_nonces (agent_id, high_water_mark, updated_at)
+            VALUES (?1, ?2, datetime('now'))
+            ON CONFLICT(agent_id) DO UPDATE SET
+                high_water_mark = excluded.high_water_mark,
+                updated_at = excluded.updated_at
+            WHERE excluded.high_water_mark > agent_telemetry_nonces.high_water_mark
+            "#,
+            params![agent_id as i64, high_water_mark as i64],
+        )
+        .map_err(|err| sanitize_storage_error("upsert telemetry nonce", err))?;
+        Ok(())
+    }
+
+    /// Allocates the lowest free FA id in `min_agent_id..=max_agent_id` and persists a HMAC secret.
+    pub fn register_agent(
+        &self,
+        min_agent_id: u16,
+        max_agent_id: u16,
+        agent_secret: &str,
+    ) -> Result<RegisteredAgentRecord, String> {
+        if min_agent_id == 0 || min_agent_id > max_agent_id {
+            return Err("invalid agent id allocation range".to_string());
+        }
+        if agent_secret.len() < 32 {
+            return Err("agent_secret must be at least 32 hex characters".to_string());
+        }
+        let conn = self.lock_conn()?;
+        let mut used = std::collections::HashSet::new();
+        {
+            let mut stmt = conn
+                .prepare("SELECT agent_id FROM registered_agents")
+                .map_err(|err| sanitize_storage_error("prepare registered agents", err))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(|err| sanitize_storage_error("query registered agents", err))?;
+            for row in rows {
+                let id = row.map_err(|err| sanitize_storage_error("read registered agent id", err))?;
+                used.insert(id as u16);
+            }
+        }
+        let Some(agent_id) = (min_agent_id..=max_agent_id).find(|id| !used.contains(id)) else {
+            return Err(format!(
+                "mesh agent capacity exhausted ({min_agent_id}..={max_agent_id} registered)"
+            ));
+        };
+        conn.execute(
+            r#"
+            INSERT INTO registered_agents (agent_id, agent_secret, created_at)
+            VALUES (?1, ?2, datetime('now'))
+            "#,
+            params![agent_id as i64, agent_secret],
+        )
+        .map_err(|err| sanitize_storage_error("register agent", err))?;
+        conn.query_row(
+            "SELECT agent_id, agent_secret, created_at FROM registered_agents WHERE agent_id = ?1",
+            params![agent_id as i64],
+            |row| {
+                Ok(RegisteredAgentRecord {
+                    agent_id: row.get::<_, i64>(0)? as u16,
+                    agent_secret: row.get(1)?,
+                    created_at: row.get(2)?,
+                })
+            },
+        )
+        .map_err(|err| sanitize_storage_error("fetch registered agent", err))
+    }
+
+    /// Returns the HMAC secret for a previously registered agent, if any.
+    pub fn get_registered_agent_secret(&self, agent_id: u16) -> Result<Option<String>, String> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT agent_secret FROM registered_agents WHERE agent_id = ?1",
+            params![agent_id as i64],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| sanitize_storage_error("lookup registered agent secret", err))
+    }
+
     fn fetch_installed_module(&self, module_name: &str) -> Result<InstalledModuleRecord, String> {
         let conn = self.lock_conn()?;
         conn.query_row(
@@ -279,6 +437,49 @@ mod tests {
             .set_module_active_state("lume_pricing", false)
             .expect("toggle");
         assert!(!toggled.is_active);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn telemetry_nonce_upsert_and_load() {
+        let path = std::env::temp_dir().join(format!(
+            "mfa-nonces-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let store = MfaModuleStore {
+            conn: Mutex::new(open_db(&path).expect("open")),
+        };
+        store.upsert_telemetry_nonce(1, 100).expect("upsert");
+        store.upsert_telemetry_nonce(1, 50).expect("ignore lower");
+        store.upsert_telemetry_nonce(1, 250).expect("raise");
+        store.upsert_telemetry_nonce(7, 3).expect("second agent");
+        let map = store.load_telemetry_nonces().expect("load");
+        assert_eq!(map.get(&1), Some(&250));
+        assert_eq!(map.get(&7), Some(&3));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn register_agent_allocates_lowest_free_id() {
+        let path = std::env::temp_dir().join(format!(
+            "mfa-register-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let store = MfaModuleStore {
+            conn: Mutex::new(open_db(&path).expect("open")),
+        };
+        let first = store
+            .register_agent(1, 8, &"a".repeat(64))
+            .expect("first");
+        assert_eq!(first.agent_id, 1);
+        let second = store
+            .register_agent(1, 8, &"b".repeat(64))
+            .expect("second");
+        assert_eq!(second.agent_id, 2);
+        assert_eq!(
+            store.get_registered_agent_secret(2).expect("lookup").as_deref(),
+            Some(second.agent_secret.as_str())
+        );
         let _ = std::fs::remove_file(path);
     }
 }

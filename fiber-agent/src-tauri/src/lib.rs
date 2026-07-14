@@ -1,4 +1,5 @@
 mod commands;
+mod fnn_address;
 
 use std::env;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use commands::{
     toggle_hardware_profile, toggle_sidecar_module, uninstall_sidecar_module,
     trigger_manual_fiat_rebalance, HardwareProfileState,
 };
+use fnn_address::get_fnn_address;
 
 fn resolve_fnn_backend_arc(agent_id: u16) -> Arc<dyn FiberNodeRpc + Send + Sync> {
     let mode = env::var("FNN_MODE").unwrap_or_else(|_| "simulate".to_string());
@@ -46,6 +48,7 @@ async fn initialize_sidecar_host(agent_id: u16) -> Result<fiber_agent::SidecarHo
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             if env::var("FNN_MODE").is_err() {
                 env::set_var("FNN_MODE", "simulate");
@@ -103,6 +106,7 @@ pub fn run() {
             toggle_hardware_profile,
             execute_dico_contribution,
             get_sidecar_stats,
+            get_fnn_address,
             generate_oob_fallback_uri,
             process_oob_fallback,
             resolve_dicoba_member_id_for_agent,

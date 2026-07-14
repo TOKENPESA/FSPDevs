@@ -1,0 +1,15 @@
+[Unit]
+Description=FSPDevs Treasury Hub (fiber-agent)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/fspdevs/treasury.env
+WorkingDirectory=/opt/fspdevs
+ExecStart=/opt/fspdevs/target/release/fiber-agent-daemon
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

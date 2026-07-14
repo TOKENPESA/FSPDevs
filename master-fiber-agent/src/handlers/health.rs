@@ -68,9 +68,10 @@ pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_js
         "compliance_ticket_v1": "/api/v1/compliance/ticket",
         "simulation": "/simulation",
         "websocket": "/ws/:agent_id",
+        "register": "POST /api/register (public, rate-limited; issues FA-N + agent_secret)",
         "monitor": "/ws/monitor",
         "dashboard": "http://localhost:8088/",
-        "agent_ws_auth": "HMAC headers X-MFA-Agent-Auth + X-Agent-ID + X-MFA-Timestamp, or legacy ?token=",
+        "agent_ws_auth": "HMAC headers X-MFA-Agent-Auth + X-Agent-ID + X-MFA-Timestamp, or legacy ?token= (per-agent secret from /api/register when registered)",
         "api_auth": "Authorization: Bearer, X-MFA-API-Token, or ?token= (env MFA_API_TOKEN)",
         "hub": {
             "rpc_url": state.hub_config.rpc_url,

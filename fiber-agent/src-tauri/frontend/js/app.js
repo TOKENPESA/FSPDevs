@@ -4,6 +4,8 @@ import { modulesForMounted } from "./module-registry.js";
 import { navIcon } from "./icons.js";
 import { getSidecarStats, hasTauri } from "./sidecar-api.js";
 import { SidecarUiHost } from "./ui-host.js";
+import fundingModule from "./modules/funding/index.js";
+import appStoreModule from "./modules/app-store/index.js";
 
 const log = createLogger("sidecar-ui");
 
@@ -13,6 +15,10 @@ const host = new SidecarUiHost(
 );
 
 async function mountUiModulesFromBackend() {
+  // Always-on onboarding + store (not gated by backend profile)
+  host.ensureRegistered(fundingModule);
+  host.ensureRegistered(appStoreModule);
+
   if (!hasTauri()) {
     log.warn("Tauri runtime unavailable — module panels stay hidden");
     return;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use axum::{
     extract::State,
     http::StatusCode,
+    middleware,
     response::IntoResponse,
     routing::{get, post, put},
     Json, Router,
@@ -13,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex as TokioMutex;
 
+use crate::api::auth::require_fa_api_auth;
 use crate::module_catalog::catalog_entries;
 use crate::module_host::SidecarHost;
 
@@ -21,13 +23,17 @@ pub struct ModuleApiState {
     pub host: Arc<TokioMutex<SidecarHost>>,
 }
 
-pub fn module_router(state: ModuleApiState) -> Router {
+pub fn module_router(state: ModuleApiState, api_token: Arc<String>) -> Router {
     Router::new()
         .route("/api/modules/catalog", get(list_catalog_handler))
         .route("/api/modules/installed", get(list_installed_handler))
         .route("/api/modules/install", post(install_module_handler))
         .route("/api/modules/uninstall", post(uninstall_module_handler))
         .route("/api/modules/toggle", put(toggle_module_handler))
+        .route_layer(middleware::from_fn_with_state(
+            api_token,
+            require_fa_api_auth,
+        ))
         .with_state(state)
 }
 

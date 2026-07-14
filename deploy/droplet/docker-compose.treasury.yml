@@ -1,0 +1,38 @@
+services:
+  treasury-hub:
+    build:
+      context: ../..
+      dockerfile: production.Dockerfile
+      target: runtime-hub
+    env_file: .env
+    environment:
+      AGENT_ID: ${AGENT_ID:-1}
+      FIBER_AGENT_BIND_ADDR: 0.0.0.0:19444
+      MFA_HOST: ${MFA_HOST}
+    volumes:
+      - hub-data:/app/.fiber-agent
+      - ../../fiber-agent/profiles/full.profile.toml:/app/sidecar.profile.toml:ro
+      - ../../fnn-testnet/mesh-pubkeys.live.example.json:/app/mesh-pubkeys.json:ro
+    ports:
+      - "127.0.0.1:19444:19444"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19444/api/modules/catalog"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    restart: unless-stopped
+
+  console:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/treasury.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      treasury-hub:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hub-data:

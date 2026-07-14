@@ -1,0 +1,15 @@
+[Unit]
+Description=FSPDevs Master Fiber Agent
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/fspdevs/mfa.env
+WorkingDirectory=/opt/fspdevs
+ExecStart=/opt/fspdevs/target/release/master_fiber_agent
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

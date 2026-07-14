@@ -1,0 +1,37 @@
+services:
+  mfa:
+    build:
+      context: ../..
+      dockerfile: production.Dockerfile
+      target: runtime-mfa
+    env_file: .env
+    environment:
+      MFA_BIND_ADDR: 0.0.0.0:1025
+    volumes:
+      - mfa-data:/app/data
+      - ../../master-fiber-agent/clearing-policy.yml:/app/clearing-policy.yml:ro
+      - ../../fnn-testnet/mesh-pubkeys.live.example.json:/app/mesh-pubkeys.json:ro
+    ports:
+      - "127.0.0.1:1025:1025"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:1025/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  console:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ../../mfa-console:/usr/share/nginx/html/mfa-console:ro
+      - ./nginx/mfa.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      mfa:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mfa-data:

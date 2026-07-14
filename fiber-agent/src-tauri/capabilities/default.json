@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "Default capability for the Fiber Agent desktop shell",
   "windows": ["main*"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "shell:allow-open"
+  ]
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
@@ -7,6 +8,7 @@ use secp256k1::{Message, PublicKey, Secp256k1};
 use sha2::{Digest, Sha256};
 
 use crate::config::DEDUPE_CAP;
+use crate::mfa_storage::MfaModuleStore;
 use crate::state::AppState;
 use crate::types::RouteRequestPayload;
 use mesh_core::types::MeshPulsePayload;
@@ -17,6 +19,30 @@ const MAX_CLOCK_SKEW_SECONDS: i64 = 15;
 /// Per-agent telemetry nonce high-water marks — rejects replayed or out-of-order heartbeats.
 static TELEMETRY_NONCE_CACHE: Lazy<std::sync::RwLock<HashMap<u16, u64>>> =
     Lazy::new(|| std::sync::RwLock::new(HashMap::new()));
+
+/// Optional SQLite-backed persistence for telemetry nonce HWMs (set during MFA boot).
+static TELEMETRY_NONCE_STORE: OnceLock<Arc<MfaModuleStore>> = OnceLock::new();
+
+/// Hydrate the in-memory nonce map from SQLite and enable write-through persistence.
+pub fn init_telemetry_nonce_persistence(store: Arc<MfaModuleStore>) -> Result<usize, String> {
+    let persisted = store.load_telemetry_nonces()?;
+    let count = persisted.len();
+    {
+        let mut registry = TELEMETRY_NONCE_CACHE
+            .write()
+            .map_err(|_| "telemetry nonce registry poisoned".to_string())?;
+        *registry = persisted;
+    }
+    let _ = TELEMETRY_NONCE_STORE.set(store);
+    Ok(count)
+}
+
+#[cfg(test)]
+pub fn reset_telemetry_nonce_cache_for_tests() {
+    if let Ok(mut registry) = TELEMETRY_NONCE_CACHE.write() {
+        registry.clear();
+    }
+}
 
 pub fn verify_telemetry_sequence(payload: &MeshPulsePayload) -> Result<(), MeshError> {
     let new_nonce = payload.nonce;
@@ -34,6 +60,18 @@ pub fn verify_telemetry_sequence(payload: &MeshPulsePayload) -> Result<(), MeshE
     }
 
     registry.insert(payload.agent_id, new_nonce);
+    drop(registry);
+
+    if let Some(store) = TELEMETRY_NONCE_STORE.get() {
+        if let Err(err) = store.upsert_telemetry_nonce(payload.agent_id, new_nonce) {
+            log::error!(
+                "⚠️ [NONCE PERSIST] Failed to durable-write HWM for FA-{} nonce {}: {err}",
+                payload.agent_id,
+                new_nonce
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -168,11 +206,39 @@ mod tests {
 
     #[test]
     fn test_verify_telemetry_sequence_rejects_replay() {
+        reset_telemetry_nonce_cache_for_tests();
         let agent_id = 9_001;
         verify_telemetry_sequence(&sample_nonce_payload(agent_id, 10)).expect("first nonce");
         let err = verify_telemetry_sequence(&sample_nonce_payload(agent_id, 10)).unwrap_err();
         assert!(err.to_string().contains("REPLAY FAULT"));
         assert!(verify_telemetry_sequence(&sample_nonce_payload(agent_id, 11)).is_ok());
+    }
+
+    #[test]
+    fn test_telemetry_nonce_survives_store_round_trip() {
+        reset_telemetry_nonce_cache_for_tests();
+        let path = std::env::temp_dir().join(format!(
+            "mfa-nonce-persist-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        std::env::set_var("MFA_SUPERVISOR_DB_PATH", path.to_string_lossy().to_string());
+        let store = Arc::new(MfaModuleStore::open().expect("open store"));
+        store
+            .upsert_telemetry_nonce(44, 750)
+            .expect("seed nonce");
+
+        // Simulate process restart: clear memory and rehydrate from SQLite.
+        reset_telemetry_nonce_cache_for_tests();
+        let loaded = store.load_telemetry_nonces().expect("load");
+        assert_eq!(loaded.get(&44), Some(&750));
+        {
+            let mut registry = TELEMETRY_NONCE_CACHE.write().expect("cache");
+            *registry = loaded;
+        }
+        let err = verify_telemetry_sequence(&sample_nonce_payload(44, 750)).unwrap_err();
+        assert!(err.to_string().contains("REPLAY FAULT"));
+        assert!(verify_telemetry_sequence(&sample_nonce_payload(44, 751)).is_ok());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

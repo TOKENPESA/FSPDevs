@@ -6,7 +6,12 @@ use mesh_core::telemetry::BalanceDepletedPayload;
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
+use fsp_fixed_math::apply_bps_spread_shannons;
+
 use crate::fnn_client::FiberNodeRpc;
+
+/// Default FX spread (bps) applied to treasury intent-swap refuel amounts.
+const DEFAULT_REFUEL_SPREAD_BPS: u32 = 25;
 
 /// Manages dynamic concurrency constraints to ensure a single channel isn't double-funded.
 pub struct FundingLockManager {
@@ -45,6 +50,7 @@ pub struct EnterpriseClearinghouse {
     funding_locks: Arc<TokioMutex<FundingLockManager>>,
     corporate_treasury_vault_id: String,
     default_refuel_allocation_shannons: u64,
+    fx_spread_bps: u32,
 }
 
 impl EnterpriseClearinghouse {
@@ -52,12 +58,22 @@ impl EnterpriseClearinghouse {
         enterprise_fnn_client: Arc<dyn FiberNodeRpc>,
         corporate_treasury_vault_id: String,
     ) -> Self {
+        let fx_spread_bps = std::env::var("CLEARINGHOUSE_FX_SPREAD_BPS")
+            .ok()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(DEFAULT_REFUEL_SPREAD_BPS);
         Self {
             enterprise_fnn_client,
             funding_locks: Arc::new(TokioMutex::new(FundingLockManager::new(60))), // 60-second window
             corporate_treasury_vault_id,
             default_refuel_allocation_shannons: 10_000_000, // Default 10M Shannons injection
+            fx_spread_bps,
         }
+    }
+
+    /// Integer-only refuel amount after FX spread markup (no float multiply).
+    fn refuel_amount_shannons(&self) -> u64 {
+        apply_bps_spread_shannons(self.default_refuel_allocation_shannons, self.fx_spread_bps)
     }
 
     /// Primary execution sequence for routing emergency liquidity outward from the central treasury.
@@ -93,6 +109,8 @@ impl EnterpriseClearinghouse {
         hasher.update(preimage_bytes);
         let payment_hash_hex = hex::encode(hasher.finalize());
 
+        let amount_shannons = self.refuel_amount_shannons();
+
         // 3. Formulate the JSON-RPC payload for the MFA's own Enterprise FNN engine
         // Instead of asking the edge node to draw funds, the MFA pushes a cross-hub intent swap down the path.
         let mfa_rpc_payload = serde_json::json!({
@@ -102,7 +120,8 @@ impl EnterpriseClearinghouse {
                 "source_vault_id": self.corporate_treasury_vault_id,
                 "target_node_pubkey": alert.agent_fnn_pubkey,
                 "target_channel_id": alert.short_channel_id,
-                "amount_shannons": self.default_refuel_allocation_shannons,
+                "amount_shannons": amount_shannons,
+                "fx_spread_bps": self.fx_spread_bps,
                 "payment_hash": payment_hash_hex,
                 "expiry_blocks": 144 // ~24 hour fallback resolution safety window
             },
@@ -111,8 +130,9 @@ impl EnterpriseClearinghouse {
 
         // 4. Dispatch the instruction directly through the MFA's Enterprise FNN Integration
         log::info!(
-            "⚡ [CLEARINGHOUSE] Dispatching intent swap from treasury. Amount: {} Shannons.",
-            self.default_refuel_allocation_shannons
+            "⚡ [CLEARINGHOUSE] Dispatching intent swap from treasury. Amount: {} Shannons (spread {} bps).",
+            amount_shannons,
+            self.fx_spread_bps
         );
         let rpc_response = self.enterprise_fnn_client.call_fnn_rpc(mfa_rpc_payload).await;
 
@@ -130,7 +150,7 @@ impl EnterpriseClearinghouse {
 
                 log::info!(
                     "✅ [CLEARINGHOUSE] Successfully injected {} Shannons into channel {}. Payment Hash: {}",
-                    self.default_refuel_allocation_shannons,
+                    amount_shannons,
                     alert.short_channel_id,
                     payment_hash_hex
                 );
@@ -189,7 +209,15 @@ mod tests {
         let payload = mock.last_payload.lock().await.clone().expect("rpc sent");
         assert_eq!(payload["method"], "execute_cross_hub_intent_swap");
         assert_eq!(payload["params"]["source_vault_id"], "corporate-vault-01");
-        assert_eq!(payload["params"]["amount_shannons"], 10_000_000);
+        let expected = apply_bps_spread_shannons(
+            10_000_000,
+            std::env::var("CLEARINGHOUSE_FX_SPREAD_BPS")
+                .ok()
+                .and_then(|raw| raw.parse().ok())
+                .unwrap_or(DEFAULT_REFUEL_SPREAD_BPS),
+        );
+        assert_eq!(payload["params"]["amount_shannons"], expected);
+        assert!(payload["params"]["fx_spread_bps"].as_u64().is_some());
     }
 
     #[test]

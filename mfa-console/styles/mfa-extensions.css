@@ -34,11 +34,24 @@
   min-height: 420px;
 }
 
-.mesh-canvas-wrap canvas {
+.mesh-canvas-wrap canvas,
+.mesh-canvas-wrap #grid.mesh-canvas-live {
   display: block;
   width: 100%;
   height: auto;
   cursor: crosshair;
+  background: #060a12;
+}
+
+/* Off-screen park with real dimensions — never 0×0 / display:none */
+#mfa-canvas-park {
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 960px;
+  height: 520px;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .mesh-canvas-hint {
@@ -51,6 +64,7 @@
   color: rgba(255, 255, 255, 0.78);
   font-size: var(--text-xs);
   pointer-events: none;
+  z-index: 2;
 }
 
 #fa-tooltip {

@@ -2,6 +2,7 @@ import { applyEdgeNodeCount, fetchHubHealth } from "../../../../dashboard/api/mf
 import { connectMonitor } from "../../../../dashboard/events/monitor.js";
 import { state } from "../../../../dashboard/state.js";
 import { paintMeshCanvasHints, tryAutoConnectMonitor, monitorStatusLabel } from "../../monitor-bridge.js";
+import { attachMeshCanvas } from "../../mesh-canvas.js";
 import { metricSection, metricCell } from "../../stats-ui.js";
 
 /** @typedef {import('../../types.js').MfaUiHostContext} MfaUiHostContext */
@@ -57,14 +58,9 @@ export const meshPanel = {
    * @param {HTMLElement} root
    * @param {MfaUiHostContext} ctx
    */
-  mount(root, ctx) {
+  async mount(root, ctx) {
     const canvasHost = root.querySelector("[data-mesh-canvas-host]");
-    const canvas = document.getElementById("grid");
-    if (canvas && canvasHost) {
-      canvas.style.position = "";
-      canvas.style.left = "";
-      canvasHost.prepend(canvas);
-    }
+    await attachMeshCanvas(canvasHost);
 
     ctx.connectMonitor = connectMonitor;
 

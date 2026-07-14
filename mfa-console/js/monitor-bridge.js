@@ -1,3 +1,4 @@
+import { mfaDisplayHost } from "../../dashboard/config.js";
 import { fetchMfaHealth } from "./mfa-api.js";
 import { connectMonitor } from "../../dashboard/events/monitor.js";
 import { state } from "../../dashboard/state.js";
@@ -19,7 +20,7 @@ export function meshCanvasHintText() {
     case "connecting":
       return "Connecting monitor WebSocket…";
     default:
-      return "Connect monitor for live heartbeats (MFA on 127.0.0.1:1025)";
+      return `Connect monitor for live heartbeats (MFA on ${mfaDisplayHost()})`;
   }
 }
 

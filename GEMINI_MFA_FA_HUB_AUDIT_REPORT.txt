@@ -1,0 +1,461 @@
+================================================================================
+FSPDevs — MFA + FA TREASURY HUB IMPLEMENTATION REPORT
+For Gemini deep audit (live DigitalOcean testnet topology · July 2026)
+================================================================================
+
+HOW TO USE WITH GEMINI
+----------------------
+Paste or upload this file as primary context, together with:
+  1. GEMINI_DEEP_AUDIT_PROMPT.txt   (audit mandate / scoring rubric)
+  2. Source bundle (if available): FSPDevs-gemini-audit-*.zip or key paths listed in §12
+
+Ask Gemini to:
+  - Adversarially audit MFA + FA-1 Hub + FNN bridge for Fiber testnet readiness
+  - Score security / reliability / ops gaps
+  - Produce a prioritized remediation roadmap (P0–P2)
+  - Distinguish localhost/sim assumptions from this live two-droplet topology
+
+Do NOT paste live secrets (API tokens, agent WS tokens, FSP_AGENT_SECRET_KEY,
+FIBER_SECRET_KEY_PASSWORD, CKB wallet keys). Treat any tokens found in
+provision scripts as potentially compromised for audit commentary only.
+
+================================================================================
+0. EXECUTIVE SUMMARY
+================================================================================
+
+FSPDevs runs a Fiber Agent mesh control plane:
+
+  Laptop/desktop fiber-agent sidecars  →  MFA droplet (master_fiber_agent)
+                                               ↑
+  Treasury Hub droplet (FA-1 + FNN)  ──────────┘
+
+Live status (as of 2026-07-14 deploy session):
+
+  • MFA (167.99.150.153): master_fiber_agent via systemd; nginx :80 → :1025
+    and /mfa-console/; FA-1 connected over control WebSocket.
+  • Treasury Hub (134.122.120.65): fiber-agent-daemon as AGENT_ID=1;
+    Nervos Fiber FNN v0.8.0 on testnet; FA-1 off simulate (live FNN RPC).
+  • FNN: P2P :8228 public; RPC loopback :18227; nginx :8227 allowlists MFA IP only.
+  • Simulated 8/1024-agent fleet is NOT installed on droplets (by design).
+  • TLS/Certbot: not yet; HTTP only on :80.
+  • Channels: 0 until CKB testnet faucet funds the hub funding address.
+
+Primary audit foci: unauthenticated FA module API (if exposed), agent WS query-token
+auth, in-memory telemetry nonce HWM, missing app-layer rate limits, CSP/Origin vs
+droplet deployment, daemon vs Tauri :19444 gap, plaintext HTTP + FNN wallet custody.
+
+================================================================================
+1. LIVE DEPLOYMENT TOPOLOGY
+================================================================================
+
+1.1 Inventory
+
+| Role            | IP              | Hostname                        | Process(es)                                      |
+|-----------------|-----------------|---------------------------------|--------------------------------------------------|
+| MFA supervisor  | 167.99.150.153  | debian-s-1vcpu-512mb-10gb-MFA   | fspdevs-mfa (master_fiber_agent), nginx          |
+| Treasury Hub    | 134.122.120.65  | debian-s-1vcpu-512mb-10gb-HUB   | fspdevs-treasury, fspdevs-fnn, nginx             |
+| Edge sidecars   | operator laptops| —                               | fiber-agent-daemon (AGENT_ID ≠ 1) → MFA_HOST     |
+
+Repo inventory file: deploy/droplet/INVENTORY.env
+
+1.2 Traffic map
+
+```
+[Edge FA N] --WS /ws/{id}?token=--> [MFA :80 → :1025]
+[Edge FA N] --HTTP /telemetry-----> [MFA Bearer API]
+[FA-1 Hub]  --WS + telemetry------> [MFA]
+[MFA]       --HTTP JSON-RPC-------> [Hub nginx :8227 → FNN 127.0.0.1:18227]
+[FA-1]      --HTTP JSON-RPC-------> [FNN 127.0.0.1:18227]
+[FNN]       --P2P :8228----------> [Fiber testnet peers / bootnodes]
+[Ops UI]    --HTTP--------------> [MFA /mfa-console/ via nginx :80]
+```
+
+1.3 Live FNN node facts (Treasury)
+
+  Version:        Fiber / FNN v0.8.0 (commit 335a74a 2026-04-03)
+  Node name:      fspdevs-treasury-hub
+  Chain:          CKB testnet
+  Fiber pubkey:   0313d0a1c4d2b028da68905f9088531f3ea7db5139788bbb681ccc7b17fdf8b6df
+  P2P peer id:    QmUZ6nZbiPEDuWHrNS3hTZqfYeH1Bw7g6K1kLZ5w8GzotS
+  Announced addr: /ip4/134.122.120.65/tcp/8228/p2p/QmUZ6nZbiPEDuWHrNS3hTZqfYeH1Bw7g6K1kLZ5w8GzotS
+  Peers:          connected to testnet bootnodes (observed 5–6)
+  Channels:       0 (awaiting faucet funding)
+  Funding lock args: 0xd86d9e57fec8ae319d3c7fde9f956878ed9d78e8
+  Testnet address (Bech32m full):
+    ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwcdk090lkg4cce60rlm60e26rcakwh36q8a679a
+  Faucet:         https://faucet.nervos.org/
+
+1.4 Why nginx for FNN RPC
+
+  FNN refuses binding JSON-RPC on a public address without biscuit_public_key.
+  This deployment does NOT use Biscuit. Pattern:
+    FNN listens 127.0.0.1:18227
+    nginx listens 0.0.0.0:8227, allow 167.99.150.153 + 127.0.0.1, deny all
+    MFA HUB_RPC_URL=http://134.122.120.65:8227
+    FA FNN_RPC_URL=http://127.0.0.1:18227
+  Scripts: deploy/droplet/nginx-fnn-rpc.sh, fnn-testnet-hub.config.yml
+
+1.5 Host build style (current live)
+
+  Droplets used native Cargo release builds + systemd (not Docker runtime), because
+  512 MB / early sizing constrained on-droplet Docker Rust builds. Dual paths exist:
+    • Docker: production.Dockerfile targets runtime-mfa / runtime-hub
+    • Native: deploy/droplet/start-*-build.sh, systemd units, provision scripts
+  MFA:      /opt/fspdevs/target/release/master_fiber_agent
+  Treasury: /opt/fspdevs/target/release/fiber-agent-daemon
+  FNN:      /opt/fnn/fnn + /opt/fnn/config.yml
+
+1.6 Mesh identity binding (FA-1)
+
+  FA-1 identity signing pubkey registered in MFA mesh-pubkeys (agent "1"):
+    03f971c803a019c0cac5edede5a15c91ef6a838af86e21d53d2739145263475e12
+  Note: this is the FA agent secp256k1 signing key for telemetry — NOT the Fiber
+  FNN node pubkey above. Auditors should verify registry contents vs live keys
+  and whether Fiber pubkey should also be catalogued for future routing/identity.
+
+================================================================================
+2. COMPONENT MAP (CODE)
+================================================================================
+
+2.1 Workspace crates
+
+| Crate                 | Path                 | Role                                              |
+|-----------------------|----------------------|---------------------------------------------------|
+| mesh-core             | mesh-core/           | RING_SIZE=1024, types, topology, pubkey registry |
+| master-fiber-agent    | master-fiber-agent/  | MFA supervisor Axum HTTP/WS control plane         |
+| fiber-agent           | fiber-agent/         | Sidecar daemon (+ Tauri desktop; + mesh-fleet)    |
+| fsp-fixed-math        | fsp-fixed-math/      | Fixed-point fiat/shannon helpers                  |
+| mesh-operator         | mesh-operator/       | Secondary; not in droplet topology                |
+
+2.2 Binaries
+
+| Binary                | Used on droplets? | Notes                                      |
+|-----------------------|-------------------|--------------------------------------------|
+| master_fiber_agent    | Yes (MFA)         | Control plane                              |
+| fiber-agent-daemon    | Yes (Treasury)    | FA-1; also laptop edges                    |
+| mesh-fleet-daemon     | No                | Simulation fleet — excluded from VPS       |
+| Tauri desktop         | No (laptops only) | Spawns module API :19444                   |
+
+2.3 Consoles / UIs
+
+| UI            | Path                         | Backend                |
+|---------------|------------------------------|------------------------|
+| MFA console   | mfa-console/                 | MFA :1025 via nginx    |
+| Shared JS     | dashboard/                   | fetchWithTimeout, money.js, logger |
+| FSP console   | fsp-console/ (React/Vite)    | Proxies /mfa-api → MFA |
+| FA Tauri UI   | fiber-agent/src-tauri/…      | Local sidecar          |
+
+================================================================================
+3. MFA IMPLEMENTATION DETAIL
+================================================================================
+
+3.1 Entrypoint
+
+  master-fiber-agent/src/main.rs → master_fiber_agent::run() in lib.rs
+  Boot: tokens, clearing env check, telemetry mpsc (TELEMETRY_QUEUE≈8192),
+  graph snapshot hydrate, SQLite module store, background workers, Axum bind
+  (optional mTLS via MFA_MTLS).
+
+3.2 Bind / env (deploy-relevant)
+
+  MFA_BIND_ADDR          (e.g. 127.0.0.1:1025 behind nginx)
+  MFA_API_TOKEN          Bearer / X-MFA-API-Token (min 16 chars in release)
+  MFA_AGENT_WS_TOKEN     Agent WS shared secret
+  MFA_WS_ALLOWED_ORIGINS Exact Origin allowlist (+ helpers)
+  HUB_RPC_URL / FNN_RPC_URL → EnterpriseFnnClient (treasury clearing/refuel)
+  MESH_PUBKEY_REGISTRY_PATH / MESH_PUBKEY_REGISTRY
+  HUB_FUNDING_SHANNONS, HUB_FUNDING_LOCK_TIMEOUT_SECS
+  MFA_* money rate envs, clearing/PAPSS/mTLS optionals
+  Example: deploy/droplet/env.mfa.example
+  Live env path pattern: /etc/fspdevs/mfa.env
+
+3.3 HTTP / WS surface
+
+Public (no API token):
+  GET  /                 health — exposes connected agents, auth hints, hub metadata
+  GET  /simulation
+  GET  /ws/:agent_id     agent control plane (token/HMAC + Origin)
+
+Protected (require_mfa_api_auth):
+  POST /telemetry
+  POST /route
+  POST /simulation
+  POST /clearing/float-crisis | /clearing/b2b-remittance | /clearing/multi-asset
+  POST /gossip/channel
+  Compliance ticket + SSE streams (+ /api/v1/compliance/*)
+  GET  /ws/monitor       UI event bus
+  /api/modules/*         plugin catalog / install / toggle
+  GET  /metrics          Prometheus
+
+Handlers under master-fiber-agent/src/handlers/
+
+3.4 Auth model
+
+  API token: Bearer, X-MFA-API-Token; ?token= rejected on non-WS HTTP after match.
+  Agent WS: preferred HMAC-SHA256 headers
+    X-MFA-Agent-Auth, X-Agent-ID, X-MFA-Timestamp (±300s)
+    message = "{agent_id}:{timestamp}"
+  Legacy: ?token= query (constant-time compare) — **current FA daemon uses this**.
+  Telemetry: API token + secp256k1 signature + pubkey registry binding +
+    ±15s timestamp skew + monotonic nonce high-water mark (IN-MEMORY).
+  Compliance streams: 30s single-use tickets.
+  Optional mTLS: MFA_MTLS=1 + CA/client certs.
+  CORS / CSWSH: exact Origin allowlist.
+
+3.5 Core modules (audit paths)
+
+  auth.rs, middleware.rs, config.rs
+  telemetry.rs          signature + nonce HWM
+  graph.rs, routing.rs, micro_routing.rs
+  payment.rs            multi-hop WS payment engine
+  hub.rs                funding locks / L2 swap orchestration
+  clearing.rs, clearinghouse.rs
+  fnn_client.rs         EnterpriseFnnClient → HUB_RPC_URL
+  plugins/*, plugin_registry.rs, policies/*
+  mfa_storage.rs, graph_persistence.rs
+  workers/background.rs
+  compliance_hub.rs
+
+3.6 Persistence (MFA)
+
+  SQLite supervisor DB: MFA_SUPERVISOR_DB_PATH or .mfa-supervisor/mfa-supervisor.db
+  Graph snapshot JSON: MFA_GRAPH_SNAPSHOT_PATH (default ~60s)
+  Topology journal WAL (worker-relative)
+  Mesh pubkey registry file
+  In-memory: nonce map, peers, funding locks, payment waiters, alert dedupe
+
+================================================================================
+4. FIBER AGENT / TREASURY HUB (FA-1) IMPLEMENTATION DETAIL
+================================================================================
+
+4.1 Entrypoint
+
+  fiber-agent/src/main.rs → run_agent_sidecar (daemon.rs)
+  Does NOT spawn module API in daemon path (spawn_module_api_server is Tauri).
+  Deploy healthchecks / nginx may still assume :19444 — SOURCE vs DEPLOY MISMATCH.
+
+4.2 Sidecar loop (daemon.rs)
+
+  • Connect MFA control WS: ws://{MFA_HOST}/ws/{AGENT_ID}?token=…
+    Origin header hardcoded to http://127.0.0.1:8088 (must stay in MFA allowlist)
+  • Poll / emit signed telemetry → MFA /telemetry (API token + signature)
+  • Offline SQLite queue offline_telemetry_queue with retry
+  • Optional FNN client (live JSON-RPC or FNN_MODE=simulate)
+  • Utility / float-crisis paths → MFA clearing endpoints
+
+4.3 Bind / env (Treasury)
+
+  AGENT_ID=1
+  MFA_HOST=<MFA IP or hostname>
+  MFA_AGENT_WS_TOKEN, MFA_API_TOKEN (telemetry)
+  FNN_RPC_URL=http://127.0.0.1:18227   (live; FNN_MODE unset)
+  FSP_AGENT_SECRET_KEY / FIBER_AGENT_SECRET_KEY_HEX
+  FIBER_AGENT_ALLOW_DEV_KEYS=false (required on Hub)
+  FIBER_AGENT_STATE_DIR / FIBER_AGENT_DB_PATH
+  MESH_PUBKEY_REGISTRY_PATH
+  Example: deploy/droplet/env.treasury.example
+  Live: /etc/fspdevs/treasury.env
+
+4.4 Storage (FA)
+
+  SQLite fa-{id}.db under FIBER_AGENT_STATE_DIR (live often /root/.fiber-agent/fa-1.db)
+  Tables include channels, offline_telemetry_queue, ledgers, modules, etc.
+  sanitize_storage_error() — never surface raw rusqlite to clients.
+
+4.5 Module API gap
+
+  fiber-agent/src/api/mod.rs — binds FIBER_AGENT_BIND_ADDR (default 127.0.0.1:19444)
+  Routes /api/modules/* with NO auth middleware found.
+  Called from Tauri boot; NOT from fiber-agent-daemon main.
+  If nginx/treasury host conf proxies :80 → :19444 while daemon lacks listener → 502.
+  If exposed without auth → install/uninstall risk. HIGH PRIORITY FOR GEMINI.
+
+4.6 Key FA modules
+
+  identity.rs, fnn_client.rs, payment.rs, hot_swap.rs
+  storage.rs (AsyncDbQueue pattern for high-velocity WAL)
+  module_host.rs, modules/* (fiat bridge, DICOBA, …)
+  clearing_client.rs
+  profiles: fiber-agent/profiles/{full,coop,kiosk,relay}.profile.toml
+
+================================================================================
+5. FNN + FIBER TESTNET INTEGRATION
+================================================================================
+
+5.1 Config (Hub)
+
+  File: /opt/fnn/config.yml (from deploy/droplet/fnn-testnet-hub.config.yml)
+  fiber.listening_addr: /ip4/0.0.0.0/tcp/8228
+  announced_addrs: /ip4/134.122.120.65/tcp/8228
+  chain: testnet
+  bootnode_addrs: official Fiber testnet bootnodes
+  rpc.listening_addr: 127.0.0.1:18227
+  ckb.rpc_url: https://testnet.ckbapp.dev/
+  services: fiber, rpc, ckb
+
+5.2 Systemd
+
+  fspdevs-fnn.service → /opt/fnn/fnn -c /opt/fnn/config.yml -d /opt/fnn
+  EnvironmentFile=/etc/fspdevs/fnn.env (FIBER_SECRET_KEY_PASSWORD)
+  fspdevs-treasury.service → fiber-agent-daemon
+  fspdevs-mfa.service → master_fiber_agent
+
+5.3 Firewall (Hub observation)
+
+  UFW: OpenSSH, 80, 443, 8228/tcp public; 8227/tcp from MFA IP only.
+
+5.4 MFA enterprise clearing path
+
+  HUB_RPC_URL → EnterpriseFnnClient → funding / refuel orchestration (hub.rs,
+  clearinghouse). Without funded CKB address + open channels, live payment
+  settlement on Fiber remains blocked even if control plane is healthy.
+
+================================================================================
+6. SECURITY CONTROL MATRIX
+================================================================================
+
+| Control                         | Status / notes                                                                 |
+|---------------------------------|--------------------------------------------------------------------------------|
+| MFA API token                   | Required (release); Bearer / header                                            |
+| Agent WS HMAC                   | Implemented on MFA; FA client still uses ?token=                             |
+| Telemetry secp256k1 + registry  | Yes; release MFA rejects unbound / dev keys                                    |
+| Telemetry nonce replay          | Yes, but HWM in-memory — restart resets; ops scripts clear agent queue         |
+| Telemetry time skew             | ±15s                                                                           |
+| HMAC time skew                  | ±300s                                                                          |
+| Origin / CSWSH                  | Exact allowlist; FA Origin fixed to 127.0.0.1:8088                             |
+| Error sanitization (SQLite)     | sanitize_storage_error in MFA + FA                                             |
+| Frontend safe messages          | mfa-console/js/dom-security.js safeUserMessage                                 |
+| Body size limit                 | ~64 KiB (app + nginx)                                                          |
+| HTTP rate limiting              | NOT found                                                                      |
+| TLS termination                 | NOT deployed (HTTP :80)                                                        |
+| FNN RPC exposure                | Loopback + nginx IP allowlist (no Biscuit)                                     |
+| FNN wallet key                  | /opt/fnn/ckb (encrypted after first start); custody/backup process TBD         |
+| FA module API auth              | NONE if listener present                                                       |
+| Money types                     | Prefer u64/BigInt; some FA float×rate→round paths remain audit-relevant        |
+| Dev defaults                    | Debug tokens exist; release requires secrets                                   |
+| Simulated payments gate         | MESH_ALLOW_SIM_PAYMENTS / debug                                                |
+| Mesh fleet on VPS               | Explicitly excluded                                                            |
+
+Ops known issue: after FA or MFA restart, telemetry can 409 REPLAY_TELEMETRY until
+offline queue cleared and MFA HWM reset (restart MFA). Scripts:
+  deploy/droplet/fix-telemetry-replay.sh
+  deploy/droplet/reset-treasury-nonce.sh
+  deploy/droplet/clear-treasury-queue.sh
+
+================================================================================
+7. DATA FLOW (NOMINAL)
+================================================================================
+
+A. Mesh presence
+   FA connects WS → MFA registers peer → health shows connected_agent_ids
+   FA posts signed telemetry → graph/liquidity update → UI monitor events
+
+B. Route + payment
+   Console/API POST /route (Bearer) → mesh graph → multi-hop plan
+   Optional dispatch_route_payment over agent WS (MESH_SEND_PAYMENT / hop settle)
+   Live settlement needs FNN channels + liquidity on Hub path
+
+C. Float / clearing
+   Edge float crisis → MFA /clearing/float-crisis
+   Enterprise clearinghouse may call Hub FNN via HUB_RPC_URL for treasury refuel
+
+D. Plugins / modules
+   MFA /api/modules/* (auth) for supervisor plugins
+   FA /api/modules/* (Tauri/local; auth gap if proxied)
+
+================================================================================
+8. DEPLOY ARTIFACT CHECKLIST
+================================================================================
+
+  deploy/droplet/README.md
+  deploy/droplet/INVENTORY.env
+  deploy/droplet/env.mfa.example
+  deploy/droplet/env.treasury.example
+  deploy/droplet/docker-compose.mfa.yml
+  deploy/droplet/docker-compose.treasury.yml
+  deploy/droplet/bootstrap.sh
+  deploy/droplet/remote-bootstrap.ps1
+  deploy/droplet/systemd/fspdevs-mfa.service
+  deploy/droplet/systemd/fspdevs-treasury.service
+  deploy/droplet/systemd/fspdevs-fnn.service
+  deploy/droplet/fnn-testnet-hub.config.yml
+  deploy/droplet/install-fnn.sh
+  deploy/droplet/start-fnn-hub.sh
+  deploy/droplet/nginx-fnn-rpc.sh
+  deploy/droplet/nginx/*.conf
+  production.Dockerfile (runtime-mfa, runtime-hub only — no mesh-fleet)
+
+Coding standards (workspace rule): fetchWithTimeout, createLogger (no console.log),
+sanitize_storage_error, safeUserMessage, money.js / round before u64.
+
+================================================================================
+9. KNOWN GAPS / QUESTIONS FOR GEMINI
+================================================================================
+
+P0 candidates
+  1. TLS before any public pilot; HSTS/certs.
+  2. Rotate any tokens committed in provision scripts; confirm live secrets uniqueness.
+  3. Close FA module API: bind localhost-only AND add auth OR remove nginx proxy.
+  4. Move FA agent WS to HMAC headers; stop putting tokens in query strings/logs.
+  5. Persist MFA telemetry nonce HWM (or sequence store) across restarts.
+
+P1 candidates
+  6. Align CSP / MFA_WS_ALLOWED_ORIGINS / FA Origin header with droplet URLs.
+  7. Resolve daemon vs :19444 healthcheck/nginx mismatch.
+  8. Application rate limits on /telemetry, /route, /clearing, /api/modules.
+  9. Fund Hub CKB address; open/verify at least one Fiber channel; end-to-end payment test.
+ 10. Document FNN wallet backup + rotation; consider Biscuit if RPC must leave allowlist.
+
+P2 candidates
+ 11. Public health endpoint information disclosure minimization.
+ 12. Eliminate remaining float money paths (DICOBA) in favor of fixed-point.
+ 13. Dual identity clarity: agent signing pubkey vs Fiber node pubkey in registry/UI.
+ 14. Observability: structured logs + metrics SLOs for WS disconnects / 409 replay.
+ 15. Private networking / VPC between MFA and Hub if DO supports it.
+
+Explicit unknowns
+  • Whether live Hub nginx currently proxies :80 → :19444 while API is down.
+  • Completeness of mesh-pubkeys vs all future edge AGENT_IDs.
+  • PAPSS gateway enabled or mocked in live MFA.
+  • Certificate/mTLS usage (likely off).
+
+================================================================================
+10. SUGGESTED GEMINI AUDIT OUTPUT FORMAT
+================================================================================
+
+Please return:
+
+1. Threat model (asset / adversary / entry points) for MFA + Hub + FNN
+2. Findings table: ID | Severity | Component | Evidence (file/path) | Impact | Fix
+3. Scorecard (0–10): Authn/z, Crypto, Network exposure, Money safety, Ops resilience,
+   Fiber readiness, Observability
+4. Testnet go / no-go with blockers
+5. 30-day remediation plan ordered by risk reduction
+6. Diff notes: what still assumes localhost simulation vs live two-droplet testnet
+
+================================================================================
+11. PRIORITY SOURCE FILES TO UPLOAD WITH THIS REPORT
+================================================================================
+
+  Cargo.toml
+  mesh-core/src/{constants,types,topology,pubkey,registry,error}.rs
+  master-fiber-agent/src/{main,lib,auth,middleware,config,telemetry,payment,hub,state,fnn_client}.rs
+  master-fiber-agent/src/handlers/{health,route,telemetry,ws_agent,ws_monitor,clearing,compliance}.rs
+  master-fiber-agent/src/{mfa_storage,graph_persistence,storage_error,api/plugin_routes}.rs
+  fiber-agent/src/{main,daemon,identity,storage,storage_error,fnn_client,api/mod,api/module_routes}.rs
+  fiber-agent/profiles/full.profile.toml
+  production.Dockerfile
+  deploy/droplet/** (README, env examples, systemd, nginx, FNN scripts)
+  dashboard/{config.js,money.js,logger.js,fetch-timeout.js}
+  mfa-console/js/{mfa-api.js,dom-security.js}
+
+================================================================================
+12. ONE-LINE BOTTOM LINE
+================================================================================
+
+MFA is a token-gated Axum mesh control plane; Treasury FA-1 is a signed sidecar
+with live Fiber FNN on CKB testnet, RPC IP-restricted to MFA; control-plane
+connectivity is verified, channel liquidity is not; ship TLS + auth hardening +
+durable replay protection before any public pilot.
+
+END OF REPORT

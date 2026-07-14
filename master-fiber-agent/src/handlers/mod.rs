@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod clearing;
 pub mod compliance;
 pub mod health;
@@ -7,6 +8,7 @@ pub mod telemetry;
 pub mod ws_agent;
 pub mod ws_monitor;
 
+pub use auth::auth_routes;
 pub use clearing::{
     ingest_b2b_remittance_handler, ingest_float_crisis_handler,
     ingest_multi_asset_clearing_handler,

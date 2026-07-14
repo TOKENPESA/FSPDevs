@@ -37,6 +37,7 @@ rustls-native-certs = "0.8"
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 hyper = "1"
 tower = { version = "0.5", features = ["util"] }
+tower-governor = { package = "tower_governor", version = "0.5", default-features = false, features = ["axum"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server", "service"] }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"

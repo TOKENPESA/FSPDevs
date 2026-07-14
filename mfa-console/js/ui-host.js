@@ -8,6 +8,7 @@ import { renderModulePage } from "./panel-shell.js";
 import { loadMfaRuntime, MFA_RUNTIME_EVENT, startMfaRuntimeWatcher } from "./mfa-runtime.js";
 import { icon, navIcon } from "./icons.js";
 import appStoreModule from "./modules/app-store/index.js";
+import { parkMeshCanvas } from "./mesh-canvas.js";
 
 /** @typedef {import('./types.js').MfaModule} MfaModule */
 /** @typedef {import('./types.js').MfaPanel} MfaPanel */
@@ -246,6 +247,7 @@ export class MfaUiHost {
   }
 
   async renderDashboard() {
+    parkMeshCanvas();
     this.contentEl.innerHTML = `<div class="dashboard-loading">Loading MFA stats…</div>`;
     const runtime = await loadDashboardSnapshot();
     this.paintDashboard(runtime);
@@ -255,6 +257,7 @@ export class MfaUiHost {
    * @param {MfaRuntimeDetail | null} runtime
    */
   paintDashboard(runtime) {
+    parkMeshCanvas();
     this.contentEl.innerHTML = renderDashboardStats(runtime);
     refreshLastSyncBadge(runtime ?? undefined);
     bindDashboardActions(this.contentEl, {
@@ -273,6 +276,7 @@ export class MfaUiHost {
     const panel = route.panel;
     if (!panel || !route.module) return;
 
+    parkMeshCanvas();
     this.contentEl.innerHTML = renderModulePage({
       panelId: panel.id,
       title: panel.title,
@@ -305,6 +309,8 @@ export class MfaUiHost {
   async navigate(routeId) {
     const route = this.allRoutes().find((entry) => entry.id === routeId);
     if (!route) return;
+    // Always detach canvas before any panel swap so it cannot linger on other routes.
+    parkMeshCanvas();
     this.currentRoute = routeId;
     this.expandGroupsForRoute(routeId);
     this.renderNav();

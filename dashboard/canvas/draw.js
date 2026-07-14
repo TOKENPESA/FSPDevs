@@ -8,22 +8,40 @@ import {
 import { pathPointAtProgress } from "../events/payment.js";
 import {
   isCommLive,
+  isEdgeBlacklisted,
   meshEdges,
   nodeX,
   nodeY,
+  pruneChannelEdges,
   pruneComm,
   pruneNodeVisualStates,
+  pruneRouteBlacklist,
   state,
 } from "../state.js";
-import { meshPeerLinks } from "../topology.js";
+import {
+  capacityStrokeStyle,
+  listLiveChannelEdges,
+  meshPeerLinks,
+  quadraticControlPoint,
+} from "../topology.js";
 import { canvas } from "./layout.js";
 
 /** @typedef {import('../types.js').PathStyle} PathStyle */
 
-const _ctx = canvas.getContext("2d");
-if (!_ctx) throw new Error("2d canvas context unavailable");
 /** @type {CanvasRenderingContext2D} */
-const ctx = _ctx;
+let ctx = (() => {
+  const c = canvas.getContext("2d");
+  if (!c) throw new Error("2d canvas context unavailable");
+  return c;
+})();
+
+/** Re-acquire 2d context after display:none / GPU reset (MFA console remount). */
+export function refreshCanvasContext() {
+  const next = canvas.getContext("2d");
+  if (!next) throw new Error("2d canvas context unavailable");
+  ctx = next;
+  return ctx;
+}
 
 const metricTick = document.getElementById("metric-tick");
 const metricLive = document.getElementById("metric-live");
@@ -100,6 +118,130 @@ function drawHoveredPaths(now) {
 /** @param {number} a @param {number} b */
 function linkActive(a, b) {
   return !state.dead.has(a) && !state.dead.has(b);
+}
+
+/**
+ * Trace a quadratic Bezier path between two nodes with a perpendicular bend.
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} x2
+ * @param {number} y2
+ * @param {number} bend
+ */
+function strokeQuadraticEdge(x1, y1, x2, y2, bend) {
+  const { cx, cy } = quadraticControlPoint(x1, y1, x2, y2, bend);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.quadraticCurveTo(cx, cy, x2, y2);
+  ctx.stroke();
+}
+
+/**
+ * Live multi-channel Fiber edges: curved paths scaled by capacity_shannons.
+ * Blacklisted hops render dashed-red with a pulse capped at the bottleneck.
+ * @param {number} now
+ */
+export function drawEdges(now) {
+  const nowMs = Date.now();
+  pruneChannelEdges(nowMs);
+  pruneRouteBlacklist(nowMs);
+
+  const edges = listLiveChannelEdges();
+  for (const edge of edges) {
+    if (edge.a > state.networkSize || edge.b > state.networkSize) continue;
+    if (!linkActive(edge.a, edge.b)) continue;
+
+    const x1 = nodeX[edge.a];
+    const y1 = nodeY[edge.a];
+    const x2 = nodeX[edge.b];
+    const y2 = nodeY[edge.b];
+    const blocked = isEdgeBlacklisted(edge.a, edge.b);
+    const { width, color } = capacityStrokeStyle(edge.capacityShannons);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (blocked) {
+      const meta = state.routeBlacklist.get(
+        edge.a < edge.b ? `${edge.a}-${edge.b}` : `${edge.b}-${edge.a}`,
+      );
+      const pulse = 0.45 + 0.45 * Math.sin(now * 0.014 * state.speed);
+      ctx.globalAlpha = 0.55 + 0.4 * pulse;
+      ctx.strokeStyle = "#e74c3c";
+      ctx.lineWidth = Math.max(2.4, width * 0.95);
+      ctx.setLineDash([7, 6]);
+      ctx.lineDashOffset = -(now * 0.05 * state.speed) % 26;
+      ctx.shadowColor = "#e74c3c";
+      ctx.shadowBlur = 10;
+      strokeQuadraticEdge(x1, y1, x2, y2, edge.bend);
+
+      const bottleneck = meta?.bottleneck ?? edge.b;
+      if (bottleneck >= 1 && bottleneck <= state.networkSize) {
+        const bx = nodeX[bottleneck];
+        const by = nodeY[bottleneck];
+        const r = 5 + 2.5 * pulse;
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 16;
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = "#ff6b5a";
+        ctx.beginPath();
+        ctx.arc(bx, by, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.4;
+        ctx.globalAlpha = 0.95;
+        ctx.beginPath();
+        ctx.moveTo(bx - 3.5, by - 3.5);
+        ctx.lineTo(bx + 3.5, by + 3.5);
+        ctx.moveTo(bx + 3.5, by - 3.5);
+        ctx.lineTo(bx - 3.5, by + 3.5);
+        ctx.stroke();
+      }
+    } else {
+      ctx.globalAlpha = edge.outboundCount > 1 ? 0.78 : 0.62;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash([]);
+      ctx.shadowColor = color;
+      ctx.shadowBlur = edge.outboundCount > 1 ? 8 : 4;
+      strokeQuadraticEdge(x1, y1, x2, y2, edge.bend);
+
+      // Capacity tick migrating along the curve for multi-outbound hubs.
+      if (edge.capacityShannons > 0 && state.playing) {
+        const t = (now * 0.0012 * state.speed + edge.indexAmongSource * 0.17) % 1;
+        const { cx, cy } = quadraticControlPoint(x1, y1, x2, y2, edge.bend);
+        const ox = (1 - t) * (1 - t) * x1 + 2 * (1 - t) * t * cx + t * t * x2;
+        const oy = (1 - t) * (1 - t) * y1 + 2 * (1 - t) * t * cy + t * t * y2;
+        ctx.globalAlpha = 0.95;
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(ox, oy, 2.4 + Math.min(1.6, width * 0.2), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Orphan blacklist hops (pathfind failed before a live edge was recorded).
+  for (const meta of state.routeBlacklist.values()) {
+    if (meta.a > state.networkSize || meta.b > state.networkSize) continue;
+    const covered = edges.some(
+      (e) => (e.a === meta.a && e.b === meta.b) || (e.a === meta.b && e.b === meta.a),
+    );
+    if (covered) continue;
+    const pulse = 0.4 + 0.4 * Math.sin(now * 0.012 * state.speed);
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.35 * pulse;
+    ctx.strokeStyle = "#c0392b";
+    ctx.lineWidth = 2.2;
+    ctx.setLineDash([5, 5]);
+    ctx.lineDashOffset = -(now * 0.04) % 20;
+    const bend = 16;
+    strokeQuadraticEdge(nodeX[meta.a], nodeY[meta.a], nodeX[meta.b], nodeY[meta.b], bend);
+    ctx.restore();
+  }
 }
 
 /** @param {Array<[number, number]>} edges @param {{ color: string, width: number, alpha?: number, hover?: string }} style @param {number} now @param {Set<number> | null} [highlightSet] */
@@ -203,15 +345,17 @@ export function drawActiveRoute(now) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  ctx.strokeStyle = failed ? "rgba(231, 76, 60, 0.5)" : "rgba(0, 212, 255, 0.25)";
+  ctx.strokeStyle = failed ? "rgba(231, 76, 60, 0.45)" : "rgba(0, 212, 255, 0.25)";
   ctx.lineWidth = 2;
   ctx.globalAlpha = 0.6;
+  ctx.setLineDash(failed ? [6, 5] : []);
   ctx.beginPath();
   ctx.moveTo(nodeX[path[0]], nodeY[path[0]]);
   for (let i = 1; i < path.length; i++) {
     ctx.lineTo(nodeX[path[i]], nodeY[path[i]]);
   }
   ctx.stroke();
+  ctx.setLineDash([]);
 
   if (traveling || settled) {
     const dot = pathPointAtProgress(path, progress);
@@ -238,6 +382,41 @@ export function drawActiveRoute(now) {
     }
   }
 
+  if (failed && pt) {
+    const bottleneck = pt.bottleneck ?? path[Math.min(path.length - 1, 1)];
+    const stopProg = path.length <= 2
+      ? Math.min(0.55, progress || 0.55)
+      : Math.min(0.92, (path.indexOf(bottleneck) / Math.max(1, path.length - 1)) || 0.45);
+    const stop = pathPointAtProgress(path, stopProg > 0 ? stopProg : 0.45);
+    ctx.strokeStyle = "#e74c3c";
+    ctx.lineWidth = 3.2;
+    ctx.globalAlpha = 0.75 + 0.2 * Math.sin(now * 0.016);
+    ctx.shadowColor = "#e74c3c";
+    ctx.shadowBlur = 14;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(nodeX[path[0]], nodeY[path[0]]);
+    if (stop) ctx.lineTo(stop.x, stop.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (stop) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#ff8a7a";
+      ctx.beginPath();
+      ctx.arc(stop.x, stop.y, 6 + 2 * Math.sin(now * 0.02), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (bottleneck >= 1 && bottleneck <= state.networkSize) {
+      const burst = 0.5 + 0.5 * Math.sin(now * 0.018);
+      ctx.globalAlpha = 0.4 + 0.35 * burst;
+      ctx.fillStyle = "#e74c3c";
+      ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.arc(nodeX[bottleneck], nodeY[bottleneck], 9 + 3 * burst, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
   if (settled && pt) {
     const dest = pt.destination;
     const burst = 0.5 + 0.5 * Math.sin(now * 0.006);
@@ -255,6 +434,7 @@ export function drawActiveRoute(now) {
 
 /** @param {number} now */
 export function drawConstellation(now) {
+  refreshCanvasContext();
   ctx.fillStyle = "#060a12";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -296,6 +476,7 @@ export function drawConstellation(now) {
   }, now, hoverMesh);
 
   drawCommLinks(now);
+  drawEdges(now);
 
   if (state.hoveredNode && state.hoveredNode <= state.networkSize) {
     drawHoveredPaths(now);

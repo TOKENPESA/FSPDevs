@@ -17,7 +17,7 @@
       <div class="brand-mark">MFA</div>
       <div class="brand-copy">
         <div class="brand-title">Supervisor Console</div>
-        <div class="brand-subtitle" id="brand-subtitle">127.0.0.1:1025</div>
+        <div class="brand-subtitle" id="brand-subtitle">mfa.fsprotocol.com</div>
       </div>
     </div>
 
@@ -63,6 +63,11 @@
     <main class="content-area" id="main-content" aria-live="polite"></main>
   </div>
 
+  <!-- Off-screen park with real size (not display:none — that wipes the canvas bitmap). -->
+  <div id="mfa-canvas-park" aria-hidden="true">
+    <canvas id="grid" width="960" height="520"></canvas>
+  </div>
+
   <div id="mfa-dashboard-bridge" hidden aria-hidden="true">
     <span id="mesh-subtitle"></span>
     <span id="size-label"></span>
@@ -81,7 +86,7 @@
     <input id="route-dest" type="number" value="512">
     <input id="route-amount" type="number" value="1000000">
     <input id="speed" type="range" value="1">
-    <input id="mfa-ws" type="text" value="ws://127.0.0.1:1025/ws/monitor">
+    <input id="mfa-ws" type="text" value="">
     <span id="route-max-label">1024</span>
     <span id="route-max-label-2">1024</span>
     <span id="hub-rpc">—</span>
@@ -92,7 +97,6 @@
     <span id="metric-liquidity-faucet">0</span>
     <span id="metric-liquidity-flight">0</span>
     <span id="metric-liquidity-fail">0</span>
-    <canvas id="grid" width="960" height="520" style="position:fixed;left:-10000px;top:0"></canvas>
     <ul id="event-log"></ul>
     <button id="btn-connect" type="button"></button>
     <button id="btn-play" type="button"></button>

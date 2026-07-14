@@ -9,6 +9,7 @@ pub mod identity;
 pub mod mesh;
 pub mod mesh_ports;
 pub mod mfa_control_bus;
+pub mod mfa_ws_auth;
 pub mod modules;
 pub mod payment;
 pub mod peer_packet;
@@ -110,6 +111,15 @@ pub struct ConfigUpdatePayload {
     pub target_fnn_pubkey: Option<String>,
     #[serde(default)]
     pub amount_shannons: Option<u64>,
+    /// Ordered Fiber node pubkeys for the HTLC path (may include the destination).
+    #[serde(default)]
+    pub route_hops: Option<Vec<String>>,
+    /// HTLC payment hash (`0x`-prefixed hex). When absent, payment is keysend.
+    #[serde(default)]
+    pub payment_hash: Option<String>,
+    /// Mapped to Fiber `final_tlc_expiry_delta` (milliseconds).
+    #[serde(default)]
+    pub cltv_expiry_delta: Option<u64>,
 }
 
 #[derive(Serialize, Debug, Clone)]

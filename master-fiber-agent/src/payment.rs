@@ -367,6 +367,30 @@ async fn dispatch_single_hop_payment(
         )
     };
 
+    let route_hops = {
+        let heartbeat = state.agent_fnn_pubkeys.read().await;
+        let allow_sim = mesh_sim_payments_enabled();
+        path.iter()
+            .skip(1)
+            .filter_map(|&agent| {
+                state
+                    .mesh_pubkey_registry
+                    .resolve_for_payment(agent, &heartbeat, allow_sim)
+            })
+            .collect::<Vec<String>>()
+    };
+
+    let cltv_expiry_delta = std::env::var("FIBER_FINAL_TLC_EXPIRY_DELTA_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(14_400_000);
+
+    println!(
+        "🧭 [PATHFIND] Compiled HTLC manifest · path={path:?} · route_hops_count={} · route_hops={route_hops:?} · cltv_expiry_delta={cltv_expiry_delta} · dest_pubkey_resolved={}",
+        route_hops.len(),
+        dest_pubkey.is_some()
+    );
+
     let Some(dest_pubkey) = dest_pubkey else {
         return RouteResponse {
             status: "ROUTE_FOUND".to_string(),
@@ -402,6 +426,8 @@ async fn dispatch_single_hop_payment(
         "destination_agent": destination,
         "target_fnn_pubkey": dest_pubkey,
         "amount_shannons": amount_shannons,
+        "route_hops": route_hops,
+        "cltv_expiry_delta": cltv_expiry_delta,
     });
 
     let delivered = {
@@ -451,7 +477,7 @@ async fn dispatch_single_hop_payment(
             "amount_shannons": amount_shannons,
             "path": path,
             "payment_id": payment_id,
-            "mode": "SINGLE_HOP",
+            "mode": "MULTI_HOP_HTLC",
         })
         .to_string(),
     );

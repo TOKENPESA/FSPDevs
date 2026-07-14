@@ -1,6 +1,18 @@
 /** @typedef {import('../types.js').MonitorEnvelope} MonitorEnvelope */
 
-import { COMM_TTL_MS, MFA_SIMULATION_URL, mfaApiToken, mfaAuthedUrl, mfaAuthHeaders } from "../config.js";
+import {
+  COMM_TTL_MS,
+  DEFAULT_MFA_API_TOKEN,
+  MFA_API_BASE_URL,
+  MFA_SIMULATION_URL,
+  isLoopbackHostname,
+  isPublicMfaHostname,
+  mfaApiToken,
+  mfaAuthedUrl,
+  mfaAuthHeaders,
+  mfaDisplayHost,
+  mfaMonitorWsBaseUrl,
+} from "../config.js";
 import { connectWebSocketWithTimeout, fetchWithTimeout } from "../fetch-timeout.js";
 import { createLogger } from "../logger.js";
 import { formatShannons } from "../format.js";
@@ -10,6 +22,7 @@ import {
   appendLogEvent,
   logEvent,
   markDirty,
+  recordChannelEdge,
   resolveNodeBalances,
   setNodeLedger,
   state,
@@ -37,9 +50,23 @@ const log = createLogger("monitor");
 /** @type {ReturnType<typeof setTimeout> | null} */
 let monitorReconnectTimer = null;
 
+/** @param {string} raw */
+function isStaleLocalhostMonitorUrl(raw) {
+  if (!/^wss?:\/\/(127\.0\.0\.1|localhost|\[::1\])\b/i.test(raw)) return false;
+  return isPublicMfaHostname(window.location.hostname);
+}
+
 function monitorWsUrl() {
-  const raw = mfaWsInput?.value?.trim() ?? "ws://127.0.0.1:1025/ws/monitor";
-  return mfaAuthedUrl(raw);
+  const raw = mfaWsInput?.value?.trim() ?? "";
+  const base =
+    !raw || isStaleLocalhostMonitorUrl(raw) ? mfaMonitorWsBaseUrl() : raw;
+  if (mfaWsInput && base !== raw) {
+    mfaWsInput.value = base;
+  }
+  if (isPublicMfaHostname() && mfaApiToken() === DEFAULT_MFA_API_TOKEN) {
+    return base;
+  }
+  return mfaAuthedUrl(base);
 }
 
 function dashboardOriginHint() {
@@ -48,10 +75,25 @@ function dashboardOriginHint() {
     return "Open via http://127.0.0.1:8088 (npm run serve:mfa), not as a local file.";
   }
   const host = window.location.hostname;
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]") {
-    return `Page origin ${origin} is not loopback — MFA blocks cross-origin monitor WS. Use http://127.0.0.1:8088`;
+  if (isLoopbackHostname(host) || isPublicMfaHostname(host)) {
+    return "";
   }
-  return "";
+  return `Page origin ${origin} is not allowlisted for MFA monitor WS — use loopback :8088 or add it to MFA_WS_ALLOWED_ORIGINS`;
+}
+
+/** @param {string} url */
+function isAllowedMonitorWsUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol === "ws:" && isLoopbackHostname(u.hostname)) return true;
+    if (u.protocol === "wss:") {
+      const apiHost = new URL(MFA_API_BASE_URL).hostname;
+      return u.hostname === apiHost;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 async function verifyMfaApiToken() {
@@ -66,6 +108,10 @@ async function verifyMfaApiToken() {
       5000,
     );
     if (res.status === 401) {
+      // Public console relies on MFA Origin allowlist for /ws/monitor (no token in JS).
+      if (isPublicMfaHostname()) {
+        return { ok: true, monitorOnly: true };
+      }
       return {
         ok: false,
         message:
@@ -223,20 +269,42 @@ export function handleMonitorMessage(raw) {
     markDirty();
   } else if (payload.event === "MESH_HEARTBEAT") {
     state.dead.delete(Number(payload.node));
+    const nodeId = Number(payload.node);
     const neighbors = Array.isArray(payload.neighbors) ? payload.neighbors.map(Number) : [];
     const channelCount = Number(payload.channels ?? neighbors.length ?? 0);
     const balances = {
       outbound: payload.local_capacity_shannons ?? payload.outbound_shannons ?? null,
       inbound: payload.inbound_shannons ?? null,
     };
-    touchCommNode(Number(payload.node), neighbors, channelCount, balances);
+    touchCommNode(nodeId, neighbors, channelCount, balances);
     if (balances.outbound != null || balances.inbound != null) {
       setNodeLedger(
-        Number(payload.node),
-        Number(balances.outbound ?? resolveNodeBalances(Number(payload.node))?.outbound ?? 0),
-        Number(balances.inbound ?? resolveNodeBalances(Number(payload.node))?.inbound ?? 0),
+        nodeId,
+        Number(balances.outbound ?? resolveNodeBalances(nodeId)?.outbound ?? 0),
+        Number(balances.inbound ?? resolveNodeBalances(nodeId)?.inbound ?? 0),
       );
     }
+
+    // Prefer per-peer capacities when MFA includes them; else share node outbound.
+    /** @type {Record<string, unknown> | null} */
+    const peerCaps = payload.peer_capacities && typeof payload.peer_capacities === "object"
+      ? /** @type {Record<string, unknown>} */ (payload.peer_capacities)
+      : null;
+    const outboundTotal = Number(balances.outbound ?? 0);
+    const share = neighbors.length > 0
+      ? Math.floor(outboundTotal / neighbors.length)
+      : outboundTotal;
+    for (const peer of neighbors) {
+      let cap = share;
+      if (peerCaps) {
+        const raw = peerCaps[String(peer)] ?? peerCaps[peer];
+        if (raw != null && Number.isFinite(Number(raw))) {
+          cap = Number(raw);
+        }
+      }
+      recordChannelEdge(nodeId, peer, cap);
+    }
+
     logEvent(
       `HEARTBEAT: FA-${payload.node} · ${channelCount} ch · out ${formatShannons(balances.outbound)} · in ${formatShannons(balances.inbound)}`,
       "heal",
@@ -272,8 +340,11 @@ export async function connectMonitor() {
   }
 
   const url = monitorWsUrl();
-  if (!url.startsWith("ws://127.0.0.1") && !url.startsWith("ws://localhost")) {
-    logEvent("Monitor URL must be ws://127.0.0.1 or ws://localhost", "warn");
+  if (!isAllowedMonitorWsUrl(url)) {
+    logEvent(
+      "Monitor URL must be ws://127.0.0.1 (local) or wss:// same host as MFA API",
+      "warn",
+    );
     return;
   }
 
@@ -283,7 +354,7 @@ export async function connectMonitor() {
   const hubOk = await fetchHubHealth(10000);
   if (!hubOk) {
     logEvent(
-      "MFA not responding on :1025 — start MFA first (cd fnn-testnet; .\\start-live-mfa.ps1), then Connect",
+      `MFA not responding at ${mfaDisplayHost()} — start MFA / check nginx, then Connect`,
       "warn",
     );
     if (connStatus) connStatus.textContent = "MFA offline";
@@ -298,6 +369,9 @@ export async function connectMonitor() {
     scheduleMonitorReconnect();
     return;
   }
+  if (tokenCheck.monitorOnly) {
+    logEvent("Monitor connecting via allowlisted Origin (API token not set)", "heal");
+  }
 
   let ws;
   try {
@@ -306,18 +380,22 @@ export async function connectMonitor() {
     log.error("monitor websocket connect failed", error);
     if (connStatus) connStatus.textContent = "WS error";
     logEvent(
-      `WebSocket failed — MFA on :1025, dashboard on :8088, token ${mfaApiToken().slice(0, 6)}…`,
+      `WebSocket failed — MFA at ${mfaDisplayHost()}, token ${mfaApiToken().slice(0, 6)}…`,
       "warn",
     );
     scheduleMonitorReconnect();
     return;
   }
   state.ws = ws;
+  // connectWebSocketWithTimeout already waited for open — set live status now.
+  if (connStatus) connStatus.textContent = "Connected";
+  connDot?.classList.add("connected");
+  logEvent(`Monitor connected: ${url}`, "heal");
+  void loadSimulationFromMfa();
+  window.dispatchEvent(new CustomEvent("mfa-monitor-status", { detail: "connected" }));
   ws.onopen = () => {
     if (connStatus) connStatus.textContent = "Connected";
     connDot?.classList.add("connected");
-    logEvent(`Monitor connected: ${url}`, "heal");
-    loadSimulationFromMfa();
   };
   ws.onclose = (ev) => {
     if (connStatus) connStatus.textContent = "Disconnected";

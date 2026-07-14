@@ -42,7 +42,7 @@ pub struct RouteRequestPayload {
     pub amount_shannons: u64,
     #[serde(default)]
     pub active_network_limit: Option<u16>,
-    /// When true (default), MFA dispatches a keysend payment on the source sidecar after routing.
+    /// When true (default), MFA dispatches a multi-hop HTLC `send_payment` on the source sidecar after routing.
     #[serde(default)]
     pub execute: Option<bool>,
     /// Target L2 asset for asset-aware pathfinding (defaults to CKB native).

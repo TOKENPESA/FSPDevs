@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "mesh-core",
+    "master-fiber-agent",
+    "fsp-fixed-math",
+]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

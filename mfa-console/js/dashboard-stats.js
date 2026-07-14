@@ -1,4 +1,5 @@
 import { createLogger } from "../../dashboard/logger.js";
+import { mfaDisplayHost } from "../../dashboard/config.js";
 import { loadMfaRuntime } from "./mfa-runtime.js";
 import { icon } from "./icons.js";
 import { formatCount, formatShannons, metricCell } from "./stats-ui.js";
@@ -58,11 +59,11 @@ function runningPluginsHint(runtime) {
  */
 function renderMetricGrid(runtime) {
   if (!runtime) {
-    return metricCell("MFA Status", "Offline", "Start MFA on 127.0.0.1:1025");
+    return metricCell("MFA Status", "Offline", `Start MFA / check ${mfaDisplayHost()}`);
   }
 
   return [
-    metricCell("Supervisor", runtime.service ?? "MFA", "127.0.0.1:1025", {
+    metricCell("Supervisor", runtime.service ?? "MFA", mfaDisplayHost(), {
       trend: !runtime.error,
     }),
     metricCell(

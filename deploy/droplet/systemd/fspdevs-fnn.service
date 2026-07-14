@@ -1,0 +1,16 @@
+[Unit]
+Description=FSPDevs Fiber Network Node (CKB testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/fspdevs/fnn.env
+WorkingDirectory=/opt/fnn
+ExecStart=/opt/fnn/fnn -c /opt/fnn/config.yml -d /opt/fnn
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

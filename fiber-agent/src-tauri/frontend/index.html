@@ -8,6 +8,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles/console.css">
+  <link rel="stylesheet" href="styles/funding.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "@ckb-ccc/core": "https://esm.sh/@ckb-ccc/core@latest",
+      "@ckb-ccc/connector": "https://esm.sh/@ckb-ccc/connector@latest"
+    }
+  }
+  </script>
 </head>
 <body class="app-shell">
   <aside class="sidebar" id="sidebar">
@@ -61,6 +70,10 @@
     <span class="ui-icon ui-icon-chat" aria-hidden="true"></span>
   </button>
 
+  <!-- CCC connector registers custom elements (`ccc-connector`) for JoyID. -->
+  <script type="module">
+    import "@ckb-ccc/connector";
+  </script>
   <script type="module" src="js/app.js"></script>
   <script type="module" src="js/shell-icons.js"></script>
 </body>

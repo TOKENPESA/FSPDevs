@@ -40,7 +40,7 @@ use clearing::RegionalClearinghouseEngine;
 use fnn_client::EnterpriseFnnClient;
 use config::{
     apply_ingress_size_boundaries, bootstrap_asset_registry, hub_funding_lock_timeout_secs,
-    load_ws_allowed_origins, mesh_mtls_enabled, parse_simulation_edge_nodes,
+    load_ws_allowed_origins, mesh_mtls_enabled, mfa_listen_addr, parse_simulation_edge_nodes,
     resolve_agent_ws_token, resolve_mfa_api_token, setup_prometheus_metrics_provider,
     spawn_mtls_server, try_init_papss_gateway, verify_clearinghouse_environmental_safety,
     BROADCAST_CAP, COMPLIANCE_BROADCAST_CAP,
@@ -49,7 +49,7 @@ use config::{
 use graph::CompleteMeshGraph;
 use graph_persistence::{GraphPersistenceManager, resolve_graph_snapshot_path};
 use handlers::{
-    calculate_transaction_route_handler, establish_regulatory_surveillance_feed,
+    auth_routes, calculate_transaction_route_handler, establish_regulatory_surveillance_feed,
     get_simulation_handler, health_handler, ingest_b2b_remittance_handler,
     ingest_float_crisis_handler, ingest_gossip_telemetry_handler, ingest_multi_asset_clearing_handler,
     ingest_telemetry_handler,
@@ -66,7 +66,6 @@ use payment::PaymentEngineState;
 use state::{load_mesh_pubkey_registry, HubConfig, PeerRegistry, SharedGraph};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
@@ -79,7 +78,11 @@ use axum::http::{header, Method};
 use axum::middleware as axum_middleware;
 use axum::routing::{get, post};
 use axum::Router;
-use middleware::{inject_security_headers_middleware, require_mfa_api_auth};
+use middleware::{
+    inject_security_headers_middleware, prefer_peer_ip_rate_limit, require_mfa_api_auth,
+    with_edge_ingress_rate_limit,
+};
+use telemetry::init_telemetry_nonce_persistence;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 const DEFAULT_LIQUIDITY_COPILOT_INTERVAL_MS: u64 = 2000;
@@ -191,6 +194,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(DEFAULT_HUB_FUNDING_SHANNONS);
     let plugin_registry = PluginRegistry::empty();
     let module_store = Arc::new(MfaModuleStore::open()?);
+    match init_telemetry_nonce_persistence(module_store.clone()) {
+        Ok(count) => println!(
+            "🔐 [MFA] Telemetry nonce HWM hydrated from SQLite ({count} agent(s))"
+        ),
+        Err(err) => {
+            eprintln!("⚠️ [MFA] Telemetry nonce hydrate failed (continuing cold): {err}");
+        }
+    }
     let plugin_hot_reloader = Arc::new(PluginHotReloader::new(
         plugin_registry.clone(),
         module_store.clone(),
@@ -291,11 +302,24 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "/simulation",
             get(get_simulation_handler),
         )
-        .route("/ws/:agent_id", get(ws_handler));
+        .route("/ws/:agent_id", get(ws_handler))
+        .merge(with_edge_ingress_rate_limit(auth_routes()));
+
+    // Rate-limit hot edge ingress separately (5 rps / burst 10).
+    if prefer_peer_ip_rate_limit() {
+        println!("🛡️ [MFA] Edge rate limit: PeerIpKeyExtractor (5 rps, burst 10)");
+    } else {
+        println!("🛡️ [MFA] Edge rate limit: SmartIpKeyExtractor (5 rps, burst 10)");
+    }
+    let rate_limited_ingress = with_edge_ingress_rate_limit(
+        Router::new()
+            .route("/telemetry", post(ingest_telemetry_handler))
+            .route("/route", post(calculate_transaction_route_handler)),
+    );
 
     let protected_routes = Router::new()
+        .merge(rate_limited_ingress)
         .route("/simulation", post(set_simulation_handler))
-        .route("/telemetry", post(ingest_telemetry_handler))
         .route("/clearing/float-crisis", post(ingest_float_crisis_handler))
         .route("/clearing/b2b-remittance", post(ingest_b2b_remittance_handler))
         .route("/clearing/multi-asset", post(ingest_multi_asset_clearing_handler))
@@ -316,7 +340,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             post(issue_compliance_stream_ticket_handler),
         )
         .route("/gossip/channel", post(ingest_gossip_telemetry_handler))
-        .route("/route", post(calculate_transaction_route_handler))
         .route("/ws/monitor", get(ui_monitor_ws_handler))
         .merge(plugin_router())
         .layer(axum_middleware::from_fn_with_state(
@@ -338,7 +361,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .layer(axum_middleware::from_fn(inject_security_headers_middleware)),
     );
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 1025));
+    let addr = mfa_listen_addr();
 
     if mesh_mtls_enabled() {
         println!(
@@ -351,7 +374,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "🚀 [MFA-1025] Mesh Network Engine operational at http://{addr}"
         );
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await?;
     }
     Ok(())
 }

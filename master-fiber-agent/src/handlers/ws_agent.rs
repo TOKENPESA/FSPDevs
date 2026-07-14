@@ -140,12 +140,22 @@ pub async fn ws_handler(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    let token_ok = validate_agent_ws_connection(
-        &headers,
-        query.get("token").map(String::as_str),
-        agent_id,
-        &state.agent_ws_token,
-    );
+    let token_ok = {
+        let registered_secret = state
+            .module_store
+            .get_registered_agent_secret(agent_id)
+            .ok()
+            .flatten();
+        let expected = registered_secret
+            .as_deref()
+            .unwrap_or(state.agent_ws_token.as_str());
+        validate_agent_ws_connection(
+            &headers,
+            query.get("token").map(String::as_str),
+            agent_id,
+            expected,
+        )
+    };
     if !token_ok {
         eprintln!("⚠️ [SECURITY] Rejected agent WS for FA-{agent_id}: invalid or missing token");
         return StatusCode::UNAUTHORIZED.into_response();

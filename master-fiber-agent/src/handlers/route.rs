@@ -87,6 +87,10 @@ pub async fn calculate_transaction_route_handler(
     let (path, _route_cost) = match route_result {
         Some(result) => result,
         None => {
+            println!(
+                "🧭 [PATHFIND] No route FA-{}→FA-{} amount={} asset={target_asset:?} limit={max_bound}",
+                payload.source, payload.destination, payload.amount_shannons
+            );
             return (
                 StatusCode::NOT_FOUND,
                 Json(RouteResponse {
@@ -102,6 +106,13 @@ pub async fn calculate_transaction_route_handler(
                 .into_response();
         }
     };
+    println!(
+        "🧭 [PATHFIND] Dijkstra compiled FA-{}→FA-{} · path={path:?} · hops={} · amount={} · execute={execute}",
+        payload.source,
+        payload.destination,
+        path.len().saturating_sub(1),
+        payload.amount_shannons
+    );
     drop(graph_read);
 
     let routing_intent = RoutingIntent {

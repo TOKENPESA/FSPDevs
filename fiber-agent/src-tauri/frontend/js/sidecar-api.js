@@ -157,3 +157,54 @@ export async function processOobFallback(uriString) {
   }
   return /** @type {Promise<string>} */ (invoke("process_oob_fallback", { uriString }));
 }
+
+/**
+ * @returns {Promise<{
+ *   address: string,
+ *   pubkey: string,
+ *   network: string,
+ *   fnnRpcUrl: string,
+ *   fundingLockScript: Record<string, unknown>,
+ *   source: string,
+ * }>}
+ */
+export async function getFnnAddress() {
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri runtime unavailable");
+  }
+  /** @type {{
+   *   address: string,
+   *   pubkey: string,
+   *   network: string,
+   *   fnnRpcUrl: string,
+   *   fundingLockScript: Record<string, unknown>,
+   *   source: string,
+   * }} */
+  const snapshot = /** @type {any} */ (await invoke("get_fnn_address"));
+  return snapshot;
+}
+
+/**
+ * Open a URL in the OS default browser (Tauri shell plugin).
+ * @param {string} url
+ */
+export async function openExternalUrl(url) {
+  const shellOpen = window.__TAURI__?.shell?.open;
+  if (typeof shellOpen === "function") {
+    await shellOpen(url);
+    return;
+  }
+  // Tauri 2 plugin invoke fallback
+  if (invoke) {
+    try {
+      await invoke("plugin:shell|open", { path: url });
+      return;
+    } catch {
+      // fall through
+    }
+  }
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    throw new Error("Unable to open external browser");
+  }
+}

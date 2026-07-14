@@ -46,6 +46,16 @@ export const state = {
   },
   /** FA id → { status, at } for copilot / liquidity visual overlays */
   nodeVisual: new Map(),
+  /**
+   * Directed Fiber channel edges from heartbeats:
+   * key `${a}->${b}` → { a, b, capacityShannons, at }
+   */
+  channelEdges: new Map(),
+  /**
+   * Pathfinder blacklist / TemporaryNodeFailure overlays:
+   * key `${a}-${b}` → { a, b, bottleneck, reason, at }
+   */
+  routeBlacklist: new Map(),
 };
 
 export let nodeX = new Float32Array(1025);
@@ -85,6 +95,8 @@ export function appendLogEvent(text, cls = "") {
 }
 
 const NODE_VISUAL_TTL_MS = 120_000;
+const ROUTE_BLACKLIST_TTL_MS = 90_000;
+const CHANNEL_EDGE_TTL_MS = 45_000;
 
 /** Applies a transient canvas overlay state for a mesh node (copilot drain, hub injection, etc.). */
 /** @param {number} node @param {string} status */
@@ -103,6 +115,75 @@ export function pruneNodeVisualStates(now = Date.now()) {
   for (const [id, meta] of state.nodeVisual) {
     if (now - meta.at > NODE_VISUAL_TTL_MS) state.nodeVisual.delete(id);
   }
+}
+
+/**
+ * Records a directed outbound Fiber channel with Shannon capacity for canvas stroke weight.
+ * @param {number} from
+ * @param {number} to
+ * @param {number} capacityShannons
+ */
+export function recordChannelEdge(from, to, capacityShannons) {
+  if (!from || !to || from === to) return;
+  if (from < 1 || to < 1 || from > state.networkSize || to > state.networkSize) return;
+  const now = Date.now();
+  const directed = `${from}->${to}`;
+  state.channelEdges.set(directed, {
+    a: from,
+    b: to,
+    capacityShannons: Math.max(0, Number(capacityShannons) || 0),
+    at: now,
+  });
+  // Keep undirected comm flash edge in sync for existing overlays.
+  touchCommEdge(from, to, "mesh");
+  if (state.channelEdges.size > 512) {
+    const oldest = [...state.channelEdges.entries()].sort((x, y) => x[1].at - y[1].at)[0];
+    if (oldest) state.channelEdges.delete(oldest[0]);
+  }
+  markDirty();
+}
+
+/** @param {number} [now] */
+export function pruneChannelEdges(now = Date.now()) {
+  for (const [key, meta] of state.channelEdges) {
+    if (now - meta.at > CHANNEL_EDGE_TTL_MS) state.channelEdges.delete(key);
+  }
+}
+
+/**
+ * Marks a hop as blacklisted after TemporaryNodeFailure / pathfind miss.
+ * @param {number} a
+ * @param {number} b
+ * @param {number} bottleneck
+ * @param {string} reason
+ */
+export function markRouteBlacklist(a, b, bottleneck, reason) {
+  if (!a || !b) return;
+  const key = commEdgeKey(a, b);
+  state.routeBlacklist.set(key, {
+    a,
+    b,
+    bottleneck: bottleneck || b,
+    reason: String(reason || "route blocked"),
+    at: Date.now(),
+  });
+  if (state.routeBlacklist.size > 64) {
+    const oldest = [...state.routeBlacklist.entries()].sort((x, y) => x[1].at - y[1].at)[0];
+    if (oldest) state.routeBlacklist.delete(oldest[0]);
+  }
+  markDirty();
+}
+
+/** @param {number} [now] */
+export function pruneRouteBlacklist(now = Date.now()) {
+  for (const [key, meta] of state.routeBlacklist) {
+    if (now - meta.at > ROUTE_BLACKLIST_TTL_MS) state.routeBlacklist.delete(key);
+  }
+}
+
+/** @param {number} a @param {number} b @returns {boolean} */
+export function isEdgeBlacklisted(a, b) {
+  return state.routeBlacklist.has(commEdgeKey(a, b));
 }
 
 /** @param {number} id @returns {{ outbound: number, inbound: number } | null} */

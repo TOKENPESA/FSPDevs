@@ -52,9 +52,7 @@ pub fn mfa_control_ws_url(agent_id: u16, mfa_host: Option<&str>) -> String {
     let host = mfa_host
         .map(normalize_mfa_host)
         .unwrap_or_else(resolve_mfa_host);
-    let ws_token =
-        std::env::var("MFA_AGENT_WS_TOKEN").unwrap_or_else(|_| "fspdevs-local-ws".into());
-    format!("ws://{host}/ws/{agent_id}?token={ws_token}")
+    crate::mfa_ws_auth::mfa_control_ws_url(agent_id, &host)
 }
 
 pub fn format_mfa_service_name(raw: &str) -> String {
@@ -153,11 +151,12 @@ mod tests {
     #[test]
     fn mfa_control_ws_url_uses_agent_route() {
         std::env::set_var("MFA_HOST", "127.0.0.1:1025");
-        std::env::set_var("MFA_AGENT_WS_TOKEN", "test-token");
+        std::env::remove_var("MFA_WS_SECURE");
         assert_eq!(
             mfa_control_ws_url(7, None),
-            "ws://127.0.0.1:1025/ws/7?token=test-token"
+            "ws://127.0.0.1:1025/ws/7"
         );
+        assert!(!mfa_control_ws_url(7, None).contains("token="));
     }
 
     #[test]

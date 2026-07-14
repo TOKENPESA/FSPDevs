@@ -206,6 +206,17 @@ pub fn mesh_mtls_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Supervisor HTTP bind address. Set `MFA_BIND_ADDR=0.0.0.0:1025` on VPS/Docker hosts.
+pub fn mfa_listen_addr() -> SocketAddr {
+    if let Ok(raw) = env::var("MFA_BIND_ADDR") {
+        match raw.parse::<SocketAddr>() {
+            Ok(addr) => return addr,
+            Err(err) => eprintln!("⚠️ [CONFIG] MFA_BIND_ADDR invalid ({raw}): {err}"),
+        }
+    }
+    SocketAddr::from(([127, 0, 0, 1], 1025))
+}
+
 pub fn telco_clearing_api_url() -> String {
     env::var("MFA_TELCO_CLEARING_API_URL").unwrap_or_default()
 }

@@ -1,0 +1,10 @@
+{
+  "name": "@fspdevs/fiber-agent-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ckb-ccc/connector": "latest",
+    "@ckb-ccc/core": "latest"
+  }
+}

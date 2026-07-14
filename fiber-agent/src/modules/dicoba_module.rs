@@ -4,6 +4,9 @@ use async_trait::async_trait;
 use mesh_core::dicoba_logic::DicobaEngine;
 use mesh_core::jungukuu_types::{DicobaMember, JunguKuuVault};
 use mesh_core::network::PeerModulePacket;
+use fsp_fixed_math::{
+    fiat_at_rate_to_shannons, interest_bps_to_percent_millis, shannons_at_rate_to_fiat_units,
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -67,7 +70,7 @@ impl SidecarModule for DicobaModule {
                 .map_err(|e| format!("Invalid vault config: {e}"))?;
                 let amount_fiat = payload["amount_fiat"].as_f64().unwrap_or(0.0);
                 let rate = payload["shannons_conversion_rate"].as_f64().unwrap_or(38.0);
-                let atomic_shannons = (amount_fiat * rate).round().max(0.0) as u64;
+                let atomic_shannons = fiat_at_rate_to_shannons(amount_fiat, rate);
                 let receipt = self
                     .edge_client
                     .stream_contribution(&vault, atomic_shannons)
@@ -169,6 +172,7 @@ impl SidecarModule for DicobaModule {
                     .and_then(|raw| Uuid::parse_str(raw).ok())
                     .unwrap_or(self.local_member_id);
                 let conversion_rate = payload["shannons_conversion_rate"].as_f64().unwrap_or(38.0);
+                let conversion_rate_units = conversion_rate.round().max(1.0) as u64;
 
                 let member = vault
                     .members
@@ -180,12 +184,16 @@ impl SidecarModule for DicobaModule {
                 let max_borrow_shannons =
                     member.maximum_borrowing_capacity(vault.share_price_shannons);
                 let rate_bps = vault.current_utilization_interest_rate();
+                let monthly_pct_millis = interest_bps_to_percent_millis(u32::from(rate_bps));
 
                 Ok(serde_json::json!({
                     "max_borrowing_capacity_shannons": max_borrow_shannons,
-                    "max_borrowing_capacity_fiat": max_borrow_shannons as f64 / conversion_rate,
+                    "max_borrowing_capacity_fiat_units": shannons_at_rate_to_fiat_units(
+                        max_borrow_shannons,
+                        conversion_rate_units
+                    ),
                     "current_interest_rate_bps": rate_bps,
-                    "current_interest_rate_monthly_pct": rate_bps as f64 / 100.0,
+                    "current_interest_rate_monthly_pct_millis": monthly_pct_millis,
                     "digital_reputation_score": member.digital_reputation_score,
                 }))
             }

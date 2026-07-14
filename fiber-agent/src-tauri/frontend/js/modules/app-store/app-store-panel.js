@@ -7,21 +7,18 @@ import { escapeHtml, safeUserMessage } from "../../dom-security.js";
 
 export const appStorePanel = {
   id: "fa-app-store",
-  title: "Module App Store",
+  title: "App Store",
   navLabel: "App Store",
   navIcon: "appStore",
-  badge: "hot-swap",
-  navDescription:
-    "Install, configure, toggle, and uninstall FA edge modules without restarting the sidecar.",
+  badge: "Tools",
+  navDescription: "Install, turn on/off, or remove tools without restarting.",
   render() {
     return renderModuleStoreShell({
-      catalogTitle: "Edge module catalog",
-      catalogHint:
-        "Native sidecar modules (DICOBA, fiat bridge, etc.) ready for runtime hot-mount.",
-      installedTitle: "Mounted modules",
-      installedHint:
-        "Synchronized with the sidecar DynamicModuleRegistry — no restart required.",
-      entityLabel: "module",
+      catalogTitle: "Available tools",
+      catalogHint: "Tools you can add to this agent.",
+      installedTitle: "Installed tools",
+      installedHint: "Changes apply immediately — no restart needed.",
+      entityLabel: "tool",
     });
   },
   /**
@@ -33,9 +30,9 @@ export const appStorePanel = {
       escapeHtml,
       safeUserMessage,
       scope: "fa-app-store",
-      entityLabel: "module",
-      catalogTitle: "Edge module catalog",
-      installedTitle: "Mounted modules",
+      entityLabel: "tool",
+      catalogTitle: "Available tools",
+      installedTitle: "Installed tools",
     });
   },
 };

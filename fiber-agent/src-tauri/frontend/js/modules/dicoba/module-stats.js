@@ -80,37 +80,37 @@ export function renderSavingsStats(snapshot) {
     metricCell(
       "Your member ID",
       shortMemberId(snapshot.dicobaMemberId),
-      snapshot.dicobaMemberId || "DiCoBa identity for this agent",
+      snapshot.dicobaMemberId || "Your ID in this savings group",
       { trend: true },
     ),
-    metricCell("Vault", snapshot.vaultName, "Active JunguKuu group vault", { trend: true }),
-    metricCell("Member Shares", formatShannons(snapshot.memberShares), "Owned cooperative shares"),
+    metricCell("Group", snapshot.vaultName, "Active savings group", { trend: true }),
+    metricCell("Your shares", formatShannons(snapshot.memberShares), "Shares you own in the group"),
     metricCell(
-      "Reputation",
+      "Trust score",
       `${snapshot.reputationScore}`,
-      snapshot.reputationScore >= 90 ? "High-trust leverage tier" : "Standard leverage tier",
+      snapshot.reputationScore >= 90 ? "High trust — larger borrow limit" : "Standard trust level",
       { trend: snapshot.reputationScore >= 90 },
     ),
     metricCell(
-      "Pool Shares",
+      "Group pool",
       formatShannons(snapshot.poolSharesShannons),
       formatFiatFromShannons(snapshot.poolSharesShannons, snapshot.conversionRate),
     ),
     metricCell(
-      "Social Fund",
+      "Social fund",
       formatShannons(snapshot.poolSocialFundShannons),
       formatFiatFromShannons(snapshot.poolSocialFundShannons, snapshot.conversionRate),
     ),
     metricCell(
       "Contributions",
       formatCount(snapshot.contributions, { label: "receipts" }),
-      "Micro-contribution receipts",
+      "Contribution receipts recorded",
     ),
-    metricCell("Total Vaults", formatCount(snapshot.totalVaults, { label: "vaults" }), "Recorded JunguKuu vaults"),
+    metricCell("Groups tracked", formatCount(snapshot.totalVaults, { label: "groups" }), "Savings groups on record"),
   ].join("");
 
-  return metricSection("DICOBA Savings", cells, {
-    hint: "Live vault transparency",
+  return metricSection("Savings overview", cells, {
+    hint: "Live group balances",
     actionHtml: `<button type="button" class="refresh-btn refresh-btn-inline" data-action="refresh-dicoba-stats">Refresh</button>`,
   });
 }
@@ -121,37 +121,37 @@ export function renderLoanStats(snapshot) {
     metricCell(
       "Your member ID",
       shortMemberId(snapshot.dicobaMemberId),
-      snapshot.dicobaMemberId || "Share this when you are the guarantor",
+      snapshot.dicobaMemberId || "Share this when you guarantee a loan",
       { trend: true },
     ),
     metricCell(
-      "Max Borrowing",
+      "Max you can borrow",
       `${snapshot.maxBorrowFiat.toLocaleString()} TZS`,
-      "Algorithmic capacity",
+      "Based on your shares and trust score",
       { trend: true },
     ),
     metricCell(
-      "Interest Rate",
+      "Interest rate",
       `${snapshot.interestMonthlyPct.toFixed(1)}% / mo`,
-      "Utilization-based APR",
+      "Monthly rate for this loan",
     ),
     metricCell(
-      "Reputation",
+      "Trust score",
       `${snapshot.reputationScore}`,
-      snapshot.reputationScore >= 90 ? "3x leverage tier" : "1x leverage tier",
+      snapshot.reputationScore >= 90 ? "High trust — up to 3× borrow" : "Standard — up to 1× borrow",
       { trend: snapshot.reputationScore >= 90 },
     ),
-    metricCell("Member Shares", formatShannons(snapshot.memberShares), "Collateral base"),
+    metricCell("Your shares", formatShannons(snapshot.memberShares), "Used as loan security"),
     metricCell(
-      "Guarantor Lock",
+      "Locked for guarantees",
       formatShannons(snapshot.lockedAsGuarantorShannons),
       formatFiatFromShannons(snapshot.lockedAsGuarantorShannons, snapshot.conversionRate),
     ),
-    metricCell("Vault", snapshot.vaultName, "Linked JunguKuu group"),
+    metricCell("Group", snapshot.vaultName, "Linked savings group"),
   ].join("");
 
-  return metricSection("Smart Loan", cells, {
-    hint: "Guarantor staking metrics",
+  return metricSection("Loan overview", cells, {
+    hint: "Borrowing and guarantee status",
     actionHtml: `<button type="button" class="refresh-btn refresh-btn-inline" data-action="refresh-dicoba-stats">Refresh</button>`,
   });
 }

@@ -73,11 +73,13 @@ impl DicobaEdgeClient {
             "id": 1
         });
 
-        let rpc_response = self
-            .fnn_client
-            .call_fnn_rpc(rpc_payload)
-            .await
-            .map_err(|err| format!("FNN Node loopback communications timeout: {err:?}"))?;
+        let rpc_response = self.fnn_client.call_fnn_rpc(rpc_payload).await.map_err(|err| {
+            format!(
+                "FNN Node loopback communications timeout: {err}. \
+                 Start local FNN (`fnn-testnet/start-testnet.ps1`, RPC http://127.0.0.1:8227) \
+                 or restart the sidecar so it can fall back to the simulated engine."
+            )
+        })?;
 
         if rpc_response
             .get("error")

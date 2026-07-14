@@ -66,13 +66,13 @@ async function resolveGuarantorMemberId(targetAgentId, stats = null) {
 
 const MODULE_LABELS = {
   dicoba: "DiCoBa loans",
-  fiat_bridge: "Fiat bridge",
+  fiat_bridge: "Cash & deposits",
 };
 
 const METHOD_LABELS = {
-  request_guarantor_signature: "Request guarantor signature",
-  dispatch_float_crisis_clearing: "Dispatch float crisis clearing",
-  process_cash_in: "Process cash-in",
+  request_guarantor_signature: "Ask guarantor to approve",
+  dispatch_float_crisis_clearing: "Request a cash refill",
+  process_cash_in: "Record a deposit",
 };
 
 /** True when backend returned SVG QR markup (may include an XML declaration). */
@@ -148,14 +148,14 @@ async function syncDicobaOobPayload(card, targetAgentId, stats = null) {
   const agentId = Number(targetAgentId);
   if (!Number.isInteger(agentId) || agentId < 1 || agentId > 1024) {
     if (hintEl) {
-      hintEl.textContent = "Enter a valid target agent (FA-1 … FA-1024).";
+      hintEl.textContent = "Enter a valid partner number (FA-1 … FA-1024).";
     }
     return;
   }
 
   const generation = ++payloadSyncGeneration;
   if (hintEl) {
-    hintEl.textContent = `Resolving guarantor_member_id for FA-${agentId}…`;
+    hintEl.textContent = `Looking up guarantor for FA-${agentId}…`;
   }
 
   try {
@@ -165,13 +165,13 @@ async function syncDicobaOobPayload(card, targetAgentId, stats = null) {
     const payload = mergeGuarantorIntoPayload(payloadField.value, guarantorMemberId);
     payloadField.value = JSON.stringify(payload, null, 2);
     if (hintEl) {
-      hintEl.innerHTML = `Auto-linked to <strong>FA-${agentId}</strong>: <code>${escapeHtml(guarantorMemberId)}</code>`;
+      hintEl.innerHTML = `Linked to <strong>FA-${agentId}</strong>: <code>${escapeHtml(guarantorMemberId)}</code>`;
     }
   } catch (error) {
     if (generation !== payloadSyncGeneration) return;
     log.warn("could not resolve guarantor member id", error);
     if (hintEl) {
-      hintEl.textContent = "Could not resolve guarantor member id for target agent.";
+      hintEl.textContent = "Could not find a guarantor ID for that partner.";
     }
   }
 }
@@ -195,9 +195,9 @@ export function renderOobFallbackCard() {
       <div class="oob-hero">
         <div class="oob-hero-icon" aria-hidden="true">${icon("float", 24)}</div>
         <div class="oob-hero-copy">
-          <span class="oob-hero-tag">Works without MFA</span>
-          <h2>Send offline to another agent</h2>
-          <p>When the network is down, create a QR or link and share it by phone, SMS, or chat. The other agent pastes it here to run the action.</p>
+          <span class="oob-hero-tag">Works offline</span>
+          <h2>Send offline to a partner</h2>
+          <p>When the network is down, create a QR or link and share it by phone, SMS, or chat. Your partner pastes it here to finish the transfer.</p>
         </div>
       </div>
 
@@ -221,7 +221,7 @@ export function renderOobFallbackCard() {
       <div class="oob-grid">
         <div class="oob-panel" data-step="1">
           <h3 class="oob-panel-title">What do you want to send?</h3>
-          <p class="oob-panel-lead">Pick the service, recipient agent, and action details.</p>
+          <p class="oob-panel-lead">Pick the service, partner number, and what you want to do.</p>
 
           <div class="oob-field">
             <label for="oob-target-module">Service</label>
@@ -233,7 +233,7 @@ export function renderOobFallbackCard() {
 
           <div class="oob-field-row">
             <div class="oob-field oob-field--compact">
-              <label for="oob-target-agent">Send to agent</label>
+              <label for="oob-target-agent">Send to partner</label>
               <div class="oob-input-prefix">
                 <span>FA-</span>
                 <input id="oob-target-agent" type="number" data-oob-target-agent min="1" max="1024" value="12" class="oob-control" aria-describedby="oob-guarantor-hint">
@@ -250,9 +250,9 @@ export function renderOobFallbackCard() {
           </div>
 
           <div class="oob-field">
-            <label for="oob-payload">Message data (JSON)</label>
-            <textarea id="oob-payload" data-oob-payload rows="4" class="oob-control oob-control--code" placeholder="Resolving guarantor member id…"></textarea>
-            <span class="oob-field-hint" id="oob-guarantor-hint" data-oob-guarantor-hint>Changing <strong>Send to agent</strong> updates <code>guarantor_member_id</code> in the JSON below.</span>
+            <label for="oob-payload">Details</label>
+            <textarea id="oob-payload" data-oob-payload rows="4" class="oob-control oob-control--code" placeholder="Looking up guarantor…"></textarea>
+            <span class="oob-field-hint" id="oob-guarantor-hint" data-oob-guarantor-hint>Changing <strong>Send to partner</strong> fills in the guarantor details below.</span>
           </div>
 
           <button type="button" class="oob-action oob-action--primary" data-action="oob-generate">
@@ -262,7 +262,7 @@ export function renderOobFallbackCard() {
         </div>
 
         <div class="oob-panel oob-panel--share" data-step="2">
-          <h3 class="oob-panel-title">Share with the other agent</h3>
+          <h3 class="oob-panel-title">Share with your partner</h3>
           <p class="oob-panel-lead">They scan the QR with a phone, or you copy the link below.</p>
 
           <div class="oob-qr-host" data-oob-qr-host hidden>
@@ -292,7 +292,7 @@ export function renderOobFallbackCard() {
 
         <div class="oob-panel oob-panel--receive" data-step="3">
           <h3 class="oob-panel-title">Receive on this device</h3>
-          <p class="oob-panel-lead">Paste a link someone sent you, then run it on this sidecar.</p>
+          <p class="oob-panel-lead">Paste a link someone sent you, then run it on this device.</p>
 
           <div class="oob-field">
             <label for="oob-import">Paste link here</label>
@@ -440,7 +440,7 @@ export async function mountOobFallbackCard(root) {
         if (qrHost) qrHost.hidden = !painted;
         if (qrPlaceholder) qrPlaceholder.hidden = painted;
       }
-      setOobStatus(shareStatus, "QR ready — share it with the other agent.", "success");
+      setOobStatus(shareStatus, "QR ready — share it with your partner.", "success");
     } catch (error) {
       setOobStatus(shareStatus, `Could not create QR: ${errorMessage(error)}`, "error");
       log.error("OOB generate failed", error);
@@ -501,7 +501,7 @@ export async function showOobFallbackInHost(
 
     hostEl.innerHTML = `
       <div class="oob-inline-result">
-        <p class="oob-inline-title"><strong>MFA offline</strong> — share this with FA-${targetAgent}</p>
+        <p class="oob-inline-title"><strong>Hub offline</strong> — share this with FA-${targetAgent}</p>
         <div class="oob-qr-svg oob-qr-svg--inline" data-oob-inline-qr></div>
         <textarea class="oob-control oob-control--code" readonly rows="2"></textarea>
         <p class="oob-field-hint">They scan the QR or paste the link in <strong>Receive on this device</strong>.</p>

@@ -8,11 +8,10 @@ import { syncVaultTransparency } from "./state.js";
 /** @type {SidecarModule} */
 export default {
   id: "dicoba",
-  label: "DICOBA JunguKuu",
-  navLabel: "DICOBA",
+  label: "DiCoBa savings groups",
+  navLabel: "DiCoBa",
   navIcon: "dicoba",
-  navDescription:
-    "Collective savings, loans, and JunguKuu vault operations",
+  navDescription: "Group savings, loans, and shared funds",
   panels: [savingsPanel, loanPanel],
   /** @param {SidecarUiContext} ctx */
   async initialize(ctx) {

@@ -8,7 +8,7 @@ export default {
   label: "App Store",
   navLabel: "App Store",
   navIcon: "appStore",
-  navDescription: "Hot-swap FA edge modules at runtime",
+  navDescription: "Install or remove tools without restarting",
   topLevel: true,
   panels: [appStorePanel],
 };

@@ -5,10 +5,10 @@ import { fundingPanel } from "./funding-panel.js";
 /** @type {SidecarModule} */
 export default {
   id: "funding",
-  label: "Global Funding Onboarding",
-  navLabel: "Funding",
+  label: "Add funds",
+  navLabel: "Add funds",
   navIcon: "funding",
-  navDescription: "Faucet and JoyID funding for the local FNN node",
+  navDescription: "Get test funds or send coins to this device",
   topLevel: true,
   panels: [fundingPanel],
 };

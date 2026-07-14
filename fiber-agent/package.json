@@ -12,7 +12,11 @@
     "tauri:dev:45": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev-fa.ps1 -AgentId 45 -SyncUi",
     "tauri:run:44": "powershell -ExecutionPolicy Bypass -File scripts/run-fa-sidecar.ps1 -AgentId 44",
     "tauri:run:45": "powershell -ExecutionPolicy Bypass -File scripts/run-fa-sidecar.ps1 -AgentId 45",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:android:env": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-env.ps1",
+    "tauri:android:init": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-env.ps1 -InstallRustTargets && tauri android init",
+    "tauri:android:dev": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-env.ps1 && npm run sync:sidecar-ui && tauri android dev",
+    "tauri:android:build": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-env.ps1 && npm run sync:sidecar-ui && tauri android build --apk"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

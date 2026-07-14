@@ -178,14 +178,14 @@ function paintLastSyncBadge(badge, runtime) {
 
   const unix = runtime?.collectedAtUnix;
   if (unix == null || Number(unix) <= 0) {
-    badge.textContent = "Last sync · pending";
+    badge.textContent = "Updating…";
     badge.removeAttribute("datetime");
-    badge.title = "Waiting for sidecar stats";
+    badge.title = "Waiting for status update";
     return;
   }
 
   const formatted = formatLastSync(unix);
-  badge.textContent = `Last sync · ${formatted}`;
+  badge.textContent = `Updated · ${formatted}`;
   badge.setAttribute("datetime", new Date(Number(unix) * 1000).toISOString());
   const modules = runtime?.mountedModules?.length ?? 0;
   badge.title = `${formatted} · ${modules} module${modules === 1 ? "" : "s"} running`;
@@ -204,7 +204,7 @@ function paintBrandSubtitle(el, runtime) {
   if (!el) return;
   el.textContent = formatBrandSubtitle(runtime);
   if (runtime?.agentId) {
-    el.title = `Agent ${runtime.agentId} · profile ${runtime.sidecarProfile ?? "unknown"}`;
+    el.title = `FA-${runtime.agentId} · ${runtime.sidecarProfile ?? "device"}`;
   }
 }
 
@@ -212,7 +212,7 @@ function paintBrandSubtitle(el, runtime) {
 function paintUserChip(runtime) {
   const name = document.querySelector(".user-name");
   if (!name) return;
-  name.textContent = runtime?.agentId ? `Node ${runtime.agentId}` : "Node —";
+  name.textContent = runtime?.agentId ? `FA-${runtime.agentId}` : "This device";
 }
 
 /** @param {SidecarRuntimeStats | null | undefined} [runtime] */
@@ -236,7 +236,7 @@ function initBrandSubtitle() {
     paintBrandSubtitle(el, runtime);
   }).catch((error) => {
     el.textContent = formatBrandSubtitleError(error);
-    el.title = error instanceof Error ? error.message : "Sidecar stats failed";
+    el.title = error instanceof Error ? error.message : "Couldn't load status";
   });
 }
 

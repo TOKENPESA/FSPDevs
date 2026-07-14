@@ -9,3 +9,12 @@ src-tauri/.tauri-fa-*.json
 *.db-wal
 *.db-shm
 **/fa-*.db
+# Android Studio / Gradle machine-local files (after `tauri android init`)
+**/local.properties
+src-tauri/gen/android/**/.gradle/
+src-tauri/gen/android/**/build/
+# Never ship npm trees inside Tauri frontendDist
+src-tauri/frontend/node_modules/
+src-tauri/frontend/package.json
+src-tauri/frontend/package-lock.json
+src-tauri/web-sdk/node_modules/

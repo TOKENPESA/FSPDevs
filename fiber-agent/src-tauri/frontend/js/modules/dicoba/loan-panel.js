@@ -23,18 +23,17 @@ import { getSidecarStats, resolveDicobaMemberId } from "../../sidecar-api.js";
 /** @type {SidecarPanel & {_repaintStats?: () => Promise<void>}} */
 export const loanPanel = {
   id: "dicoba-loan",
-  title: "Smart Loan & Guarantor Staking",
-  navLabel: "Smart Loans",
+  title: "Loans & guarantors",
+  navLabel: "Loans",
   navIcon: "loans",
-  badge: "dicoba / request_loan",
-  navDescription:
-    "Request algorithmic loans with decentralized guarantor staking",
+  badge: "Loans",
+  navDescription: "Request a loan with a guarantor from your group",
   render() {
     return `
       <div class="module-workspace-inner" data-panel="dicoba-loan">
         <div class="workspace-card">
           <div class="input-group">
-            <label>Target JunguKuu Vault</label>
+            <label>Group vault</label>
             <select data-dicoba-loan-vault aria-label="Select vault for loan request">
               <option value="${vaultState.groupName}">${vaultState.groupName}</option>
             </select>
@@ -47,16 +46,16 @@ export const loanPanel = {
             >
           </div>
           <div class="input-group">
-            <label>Requested Loan Amount (TZS)</label>
+            <label>Loan amount (TZS)</label>
             <input type="number" data-dicoba-loan-amount value="50000" min="1000">
           </div>
           <div class="input-group">
-            <label>Guarantor Member ID (receiving agent's DiCoBa ID)</label>
-            <input type="text" data-dicoba-guarantor placeholder="Auto-filled from mesh peer when available">
+            <label>Guarantor's DiCoBa ID</label>
+            <input type="text" data-dicoba-guarantor placeholder="Filled from your partner when available">
           </div>
-          <button type="button" class="primary-btn btn-loan" data-action="dicoba-request-loan">Initiate Smart Loan Contract</button>
+          <button type="button" class="primary-btn btn-loan" data-action="dicoba-request-loan">Request loan</button>
           <button type="button" class="hero-btn" data-action="dicoba-oob-guarantor" hidden>
-            Generate OOB QR for Guarantor
+            Share offline QR with guarantor
           </button>
           <div class="receipt-log loan" data-dicoba-loan-log style="display:none;"></div>
           <div class="receipt-log oob" data-dicoba-oob-log style="display:none;"></div>
@@ -137,14 +136,14 @@ export const loanPanel = {
           if (log instanceof HTMLElement) {
             log.style.display = "block";
             log.innerHTML =
-              "❌ <strong>Error:</strong> A valid Guarantor ID is required to stake shares.";
+              "❌ <strong>Error:</strong> Enter a guarantor ID so they can back this loan.";
           }
           return;
         }
 
         if (log instanceof HTMLElement) {
           log.style.display = "block";
-          log.innerHTML = `⚡ Drafting loan contract for <strong>${escapeHtml(groupName)}</strong>...`;
+          log.innerHTML = `Preparing loan request for <strong>${escapeHtml(groupName)}</strong>…`;
         }
 
         try {
@@ -159,7 +158,7 @@ export const loanPanel = {
             })
           );
           if (log instanceof HTMLElement) {
-            log.innerHTML = `✅ <strong>Loan Contract Staged!</strong><br>Vault: ${escapeHtml(groupName)}<br>Status: ${escapeHtml(String(receipt.status ?? ""))}<br>${escapeHtml(String(receipt.message ?? ""))}<br>Awaiting Cryptographic Signature from Guarantor ID: ${escapeHtml(guarantorId.substring(0, 8))}...`;
+            log.innerHTML = `✅ <strong>Loan request ready</strong><br>Vault: ${escapeHtml(groupName)}<br>Status: ${escapeHtml(String(receipt.status ?? ""))}<br>${escapeHtml(String(receipt.message ?? ""))}<br>Waiting for guarantor approval (${escapeHtml(guarantorId.substring(0, 8))}…)`;
           }
 
           const principalShannons = Number(
@@ -193,7 +192,7 @@ export const loanPanel = {
           }
         } catch (error) {
           if (log instanceof HTMLElement) {
-            log.innerHTML = `❌ <strong>Contract Rejected:</strong> ${escapeHtml(errorMessage(error))}`;
+            log.innerHTML = `❌ <strong>Loan request failed:</strong> ${escapeHtml(errorMessage(error))}`;
           }
         }
       });

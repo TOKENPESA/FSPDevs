@@ -4,14 +4,15 @@ mod fnn_address;
 use std::env;
 use std::sync::Arc;
 
-use fiber_agent::fnn_client::{FiberNodeRpc, LiveFnnClient, SimulatedFnnClient};
+use fiber_agent::fnn_client::FiberNodeRpc;
 use fiber_agent::mesh_ports::resolve_fnn_rpc_url;
 use fiber_agent::module_registry::{boot_sidecar_host, SidecarBootContext};
-use fiber_agent::parse_agent_id;
+use fiber_agent::resolve_fnn_backend;
 use fiber_agent::resolve_local_dicoba_member_id;
+use fiber_agent::resolve_runtime_identity;
 use fiber_agent::spawn_sidecar_mfa_control_ws;
 use fiber_agent::storage::AgentDb;
-use fiber_agent::MfaControlBus;
+use fiber_agent::{MfaControlBus, SidecarConfig};
 use tauri::Manager;
 use tokio::sync::Mutex as TokioMutex;
 use commands::{
@@ -24,18 +25,15 @@ use commands::{
 };
 use fnn_address::get_fnn_address;
 
-fn resolve_fnn_backend_arc(agent_id: u16) -> Arc<dyn FiberNodeRpc + Send + Sync> {
-    let mode = env::var("FNN_MODE").unwrap_or_else(|_| "simulate".to_string());
-    if mode.eq_ignore_ascii_case("testnet") || mode.eq_ignore_ascii_case("live") {
-        let rpc_url = env::var("FNN_RPC_URL").unwrap_or_else(|_| resolve_fnn_rpc_url(agent_id));
-        Arc::new(LiveFnnClient::new(rpc_url))
-    } else {
-        Arc::new(SimulatedFnnClient::new(agent_id))
-    }
+/// Prefer a live local FNN when reachable; otherwise fall back to the simulated engine
+/// so DiCoBa / modules keep working without `fnn-testnet` running.
+async fn resolve_fnn_backend_arc(agent_id: u16) -> Arc<dyn FiberNodeRpc + Send + Sync> {
+    let rpc_url = env::var("FNN_RPC_URL").unwrap_or_else(|_| resolve_fnn_rpc_url(agent_id));
+    Arc::from(resolve_fnn_backend(agent_id, &rpc_url).await)
 }
 
 async fn initialize_sidecar_host(agent_id: u16) -> Result<fiber_agent::SidecarHost, String> {
-    let fnn_client = resolve_fnn_backend_arc(agent_id);
+    let fnn_client = resolve_fnn_backend_arc(agent_id).await;
     let db = Arc::new(AgentDb::open(agent_id)?);
     let member_id = resolve_local_dicoba_member_id(agent_id);
     let boot_ctx = SidecarBootContext::load(agent_id, fnn_client, db, member_id)?;
@@ -54,11 +52,20 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             if env::var("FNN_MODE").is_err() {
-                env::set_var("FNN_MODE", "simulate");
+                env::set_var("FNN_MODE", "testnet");
             }
-            let agent_id = parse_agent_id().map_err(|err| -> Box<dyn std::error::Error> {
-                err.into()
-            })?;
+            // Desktop default: obtain an MFA-issued FA-N + HMAC secret unless the operator
+            // explicitly disables registration and supplies AGENT_ID + MFA_AGENT_WS_TOKEN.
+            if env::var("MFA_AUTO_REGISTER").is_err() && env::var("MFA_AGENT_WS_TOKEN").is_err() {
+                env::set_var("MFA_AUTO_REGISTER", "true");
+            }
+
+            let mut sidecar_config = SidecarConfig::from_env();
+            let identity = tauri::async_runtime::block_on(resolve_runtime_identity(&mut sidecar_config))
+                .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
+            let agent_id = identity.agent_id;
+            env::set_var("AGENT_ID", agent_id.to_string());
+            env::set_var("MFA_AGENT_WS_TOKEN", &identity.agent_secret);
 
             let mut sidecar_host = tauri::async_runtime::block_on(initialize_sidecar_host(agent_id))
                 .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
@@ -66,6 +73,7 @@ pub fn run() {
             let mfa_agent_id = sidecar_host.agent_id;
             let mfa_fnn = sidecar_host.fnn_client.clone();
             let mfa_db = sidecar_host.db.clone();
+            let mfa_ws_secret = identity.agent_secret.clone();
             let peer_outbound_rx = sidecar_host.take_outbound_receiver();
             let (mfa_bus, sys_broadcast_rx) = MfaControlBus::channel();
             tauri::async_runtime::spawn(async move {
@@ -75,6 +83,7 @@ pub fn run() {
                     mfa_db,
                     peer_outbound_rx,
                     Some(sys_broadcast_rx),
+                    Some(mfa_ws_secret),
                 );
             });
 
@@ -95,7 +104,10 @@ pub fn run() {
                 .get_webview_window(&window_label)
                 .or_else(|| app.get_webview_window("main"))
             {
-                let _ = window.set_title(&format!("Fiber Sidecar - FA-{agent_id}"));
+                let _ = window.set_title(&format!(
+                    "Fiber Sidecar - {}",
+                    identity.agent_id_label
+                ));
             }
 
             Ok(())

@@ -35,7 +35,7 @@ export function renderVaultContributorsPanel({ groupName, contributors = [] }) {
           (entry) => `
           <tr>
             <td><code>${escapeHtml(shortMemberId(String(entry.member_id ?? entry.memberId ?? "")))}</code></td>
-            <td>${formatCount(Number(entry.contribution_count ?? entry.contributionCount ?? 0), { label: "streams" })}</td>
+            <td>${formatCount(Number(entry.contribution_count ?? entry.contributionCount ?? 0), { label: "payments" })}</td>
             <td>${formatShannons(Number(entry.total_shannons ?? entry.totalShannons ?? 0))}</td>
             <td>${formatFiatFromShannons(
               Number(entry.total_shannons ?? entry.totalShannons ?? 0),
@@ -57,7 +57,7 @@ export function renderVaultContributorsPanel({ groupName, contributors = [] }) {
       <div class="contributor-panel-header">
         <div>
           <h2>Contributing Members</h2>
-          <p>Members who have streamed micro-contributions into <strong>${escapeHtml(groupName)}</strong>.</p>
+          <p>Members who have contributed to <strong>${escapeHtml(groupName)}</strong>.</p>
         </div>
         <button type="button" class="refresh-btn refresh-btn-inline" data-action="refresh-vault-contributors">Refresh</button>
       </div>
@@ -66,8 +66,8 @@ export function renderVaultContributorsPanel({ groupName, contributors = [] }) {
           <thead>
             <tr>
               <th>Member ID</th>
-              <th>Streams</th>
-              <th>Total Shannons</th>
+              <th>Payments</th>
+              <th>Total contributed</th>
               <th>Total Fiat</th>
               <th>Last Contribution</th>
             </tr>

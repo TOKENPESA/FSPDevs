@@ -17,27 +17,26 @@ const log = createLogger("fiat-bridge");
 /** @type {SidecarPanel} */
 export const feePanel = {
   id: "fiat-bridge-fees",
-  title: "Dynamic Fee Estimation Engine",
-  navLabel: "Fee Estimation",
+  title: "Fee preview",
+  navLabel: "Fees",
   navIcon: "fees",
-  badge: "fiat_bridge / calculate_invoice_preview",
-  navDescription:
-    "Preview routing, kiosk, and sovereign levy deductions before cash-out",
+  badge: "Fees",
+  navDescription: "See fees before cashing out",
   render() {
     return `
       <div class="module-workspace-inner" data-panel="fiat-bridge-fees">
         <div class="workspace-card">
           <div class="input-group">
-            <label>Target Cash-Out Volume (Fiat)</label>
+            <label>Cash-out amount (TZS)</label>
             <input type="number" data-fiat-volume value="50000">
           </div>
           <div class="fee-breakdown">
-            <div class="fee-line"><span>L1/L2 Channel Routing Fee:</span><strong data-fee-l1>0.00</strong></div>
-            <div class="fee-line"><span>Kiosk Commission:</span><strong data-fee-l2>0.00</strong></div>
-            <div class="fee-line"><span>Sovereign Tax Levy (0.1%):</span><strong data-fee-l3 style="color:var(--accent);">0.00</strong></div>
+            <div class="fee-line"><span>Network fee:</span><strong data-fee-l1>0.00</strong></div>
+            <div class="fee-line"><span>Agent fee:</span><strong data-fee-l2>0.00</strong></div>
+            <div class="fee-line"><span>Tax (0.1%):</span><strong data-fee-l3 style="color:var(--accent);">0.00</strong></div>
             <hr class="workspace-divider">
             <div class="fee-line fee-line--total">
-              <span>Total Deducted Invoice Amount:</span>
+              <span>Total after fees:</span>
               <strong data-fee-total style="color:var(--accent);">0.00</strong>
             </div>
           </div>

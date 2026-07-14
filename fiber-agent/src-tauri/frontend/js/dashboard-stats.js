@@ -27,24 +27,46 @@ export async function loadDashboardSnapshot() {
   }
 }
 
+/** @param {string | undefined} status */
+function friendlyFnnStatus(status) {
+  switch ((status ?? "").toLowerCase()) {
+    case "online":
+      return "Online";
+    case "simulated":
+      return "Demo mode";
+    case "offline":
+      return "Offline";
+    default:
+      return "Unknown";
+  }
+}
+
+/** @param {string | undefined} backend */
+function friendlyFnnBackend(backend) {
+  const value = (backend ?? "").toLowerCase();
+  if (value.includes("sim")) return "Demo network";
+  if (value.includes("live")) return "Live network";
+  return backend || "—";
+}
+
 function mfaHint(/** @type {SidecarRuntimeStats} */ runtime) {
   if (runtime.mfaControlConnected) {
-    return `Registered · ${runtime.mfaWsUrl ?? runtime.mfaHost}`;
+    return "Connected and signed in";
   }
   if (runtime.mfaReachable || runtime.mfaConnectionStatus === "reachable") {
-    return `Reachable only · WS not registered`;
+    return "Reachable, but not signed in yet";
   }
-  return `Unreachable · ${runtime.mfaHost}`;
+  return "Can't reach the hub right now";
 }
 
 function fnnHint(/** @type {SidecarRuntimeStats} */ runtime) {
   if (runtime.fnnConnectionStatus === "simulated") {
-    return `Mock engine · ${runtime.fnnP2pEndpoint ?? "simulate mode"}`;
+    return "Running in demo mode — payments stay on this device";
   }
   if (runtime.fnnConnectionStatus === "online") {
-    return `${(runtime.fnnRpcUrl ?? "").replace("http://", "")} · P2P ${runtime.fnnP2pEndpoint ?? "—"}`;
+    return "Connected to your local payment network";
   }
-  return `${(runtime.fnnRpcUrl ?? "").replace("http://", "")} · P2P ${runtime.fnnP2pEndpoint ?? "—"}`;
+  return "Payment network is offline";
 }
 
 /**
@@ -72,10 +94,16 @@ function renderStatusPills(runtime) {
   if (!runtime) return "";
   const pills = [
     { label: formatAgentLabel(runtime), status: "online" },
-    { label: runtime.mfaControlConnected ? "MFA linked" : "MFA offline", status: connectionStatus(runtime, "mfa") },
-    { label: runtime.fnnConnectionStatus ?? "FNN unknown", status: connectionStatus(runtime, "fnn") },
     {
-      label: `${runtime.meshChannelsActive ?? 0} channels`,
+      label: runtime.mfaControlConnected ? "Hub connected" : "Hub offline",
+      status: connectionStatus(runtime, "mfa"),
+    },
+    {
+      label: friendlyFnnStatus(runtime.fnnConnectionStatus),
+      status: connectionStatus(runtime, "fnn"),
+    },
+    {
+      label: `${runtime.meshChannelsActive ?? 0} payment links`,
       status: (runtime.meshChannelsActive ?? 0) > 0 ? "online" : "neutral",
     },
   ];
@@ -96,17 +124,17 @@ function renderKpiStrip(runtime) {
   if (!runtime) {
     return `
       <div class="dashboard-kpi-strip">
-        ${kpiCard("Runtime", "Offline", "Start the Tauri shell", { status: "offline" })}
+        ${kpiCard("Status", "Offline", "Open the desktop app to load live updates", { status: "offline" })}
       </div>
     `;
   }
 
   return `
     <div class="dashboard-kpi-strip">
-      ${kpiCard("Total liquidity", formatShannonsCompact(runtime.fnnTotalLiquidityShannons), formatFiatFromShannons(runtime.fnnTotalLiquidityShannons, runtime.fiatConversionRate), { status: "online" })}
-      ${kpiCard("Open channels", `${runtime.meshChannelsActive ?? 0} / ${runtime.meshChannelsTotal ?? 0}`, "Active payment channels", { status: (runtime.meshChannelsActive ?? 0) > 0 ? "online" : "neutral" })}
-      ${kpiCard("Edge settlements", formatCount(runtime.edgeSettled ?? 0, { label: "confirmed" }), formatCount(runtime.edgePending ?? 0, { label: "pending" }), { status: (runtime.edgeSettled ?? 0) > 0 ? "online" : "neutral" })}
-      ${kpiCard("Telemetry backlog", formatCount(runtime.queuedTelemetry ?? 0, { label: "pulses" }), runtime.mfaControlConnected ? "MFA control online" : "WAL on supervisor", { status: (runtime.queuedTelemetry ?? 0) > 0 ? "warn" : "online" })}
+      ${kpiCard("Available balance", formatShannonsCompact(runtime.fnnTotalLiquidityShannons), formatFiatFromShannons(runtime.fnnTotalLiquidityShannons, runtime.fiatConversionRate), { status: "online" })}
+      ${kpiCard("Payment links", `${runtime.meshChannelsActive ?? 0} / ${runtime.meshChannelsTotal ?? 0}`, "Links you can send and receive on", { status: (runtime.meshChannelsActive ?? 0) > 0 ? "online" : "neutral" })}
+      ${kpiCard("Completed payments", formatCount(runtime.edgeSettled ?? 0, { label: "done" }), formatCount(runtime.edgePending ?? 0, { label: "waiting" }), { status: (runtime.edgeSettled ?? 0) > 0 ? "online" : "neutral" })}
+      ${kpiCard("Waiting to sync", formatCount(runtime.queuedTelemetry ?? 0, { label: "updates" }), runtime.mfaControlConnected ? "Hub sync is on" : "Saved until the hub reconnects", { status: (runtime.queuedTelemetry ?? 0) > 0 ? "warn" : "online" })}
     </div>
   `;
 }
@@ -124,8 +152,8 @@ function renderLiquidityAside(runtime) {
     <aside class="dashboard-aside">
       <div class="aside-card">
         <div class="aside-head">
-          <h3>Mesh Liquidity</h3>
-          <span class="aside-hint">FNN channel capacity split</span>
+          <h3>Balance split</h3>
+          <span class="aside-hint">How funds are split on your payment links</span>
         </div>
 
         <div
@@ -134,7 +162,7 @@ function renderLiquidityAside(runtime) {
         >
           <div class="liquidity-donut-hole">
             <strong title="${formatShannons(runtime.fnnTotalLiquidityShannons)}">${formatShannonsCompact(runtime.fnnTotalLiquidityShannons)}</strong>
-            <span>total shannons</span>
+            <span>total balance</span>
           </div>
         </div>
 
@@ -142,22 +170,22 @@ function renderLiquidityAside(runtime) {
           <li>
             <span class="liquidity-dot outbound"></span>
             <span class="liquidity-legend-copy">
-              <strong>Outbound</strong>
+              <strong>You can send</strong>
               <span>${localPct.toFixed(1)}% · ${formatShannons(local)}</span>
             </span>
           </li>
           <li>
             <span class="liquidity-dot inbound"></span>
             <span class="liquidity-legend-copy">
-              <strong>Inbound</strong>
+              <strong>You can receive</strong>
               <span>${remotePct.toFixed(1)}% · ${formatShannons(remote)}</span>
             </span>
           </li>
           <li>
             <span class="liquidity-dot cached"></span>
             <span class="liquidity-legend-copy">
-              <strong>Cached snapshots</strong>
-              <span>${formatCount(cached, { label: "channel rows" })}</span>
+              <strong>Saved link data</strong>
+              <span>${formatCount(cached, { label: "saved links" })}</span>
             </span>
           </li>
         </ul>
@@ -198,108 +226,124 @@ function renderHeroVisual(mounted) {
   `;
 }
 
+/** @param {string[]} mounted @returns {string} */
+function friendlyModuleList(mounted) {
+  if (mounted.length === 0) return "None";
+  return mounted
+    .map((id) => {
+      if (id === "dicoba") return "Group savings";
+      if (id === "fiat_bridge") return "Mobile money";
+      return id.replaceAll("_", " ");
+    })
+    .join(", ");
+}
+
 /** @param {SidecarRuntimeStats | null | undefined} runtime @returns {string} */
 function renderMetricSections(runtime) {
   if (!runtime) {
     return dashboardMetricSection(
-      "Runtime",
-      "Sidecar stats unavailable",
-      metricCell("Status", "Offline", "Start the Tauri desktop shell to load live stats"),
+      "Status",
+      "Live updates unavailable",
+      metricCell("Status", "Offline", "Open the desktop app to load live status"),
     );
   }
 
   const mounted = runningModules(runtime);
   const runningHint =
     mounted.length === 0
-      ? "No FSP modules are actively running on this sidecar"
-      : "Hot-mounted modules currently executing RPC and peer routes";
+      ? "No tools are running on this device"
+      : "Tools currently running on this device";
 
   return [
     dashboardMetricSection(
-      "Connectivity",
-      "MFA control plane, FNN pairing, and mesh peers",
+      "Connections",
+      "Hub, network, and partner links",
       [
-        metricCell("Connected MFA", runtime.mfaName ?? "—", mfaHint(runtime), {
+        metricCell("Connected hub", runtime.mfaName ?? "—", mfaHint(runtime), {
           trend: runtime.mfaControlConnected === true,
         }),
-        metricCell("FNN status", runtime.fnnConnectionStatus ?? "—", fnnHint(runtime), {
+        metricCell("Network status", friendlyFnnStatus(runtime.fnnConnectionStatus), fnnHint(runtime), {
           trend: runtime.fnnConnectionStatus !== "offline",
         }),
-        metricCell("FNN backend", runtime.fnnBackend ?? "—", runtime.fnnMode ?? "—"),
-        metricCell("Mesh peer", runtime.meshPeerAgentId ? `FA-${runtime.meshPeerAgentId}` : "—", shortPubkey(runtime.meshPeerPubkey)),
-        metricCell("FNN pubkey", shortPubkey(runtime.nodePubkey), "Paired node identity"),
+        metricCell("Network mode", friendlyFnnBackend(runtime.fnnBackend), "How this device moves money"),
+        metricCell(
+          "Partner",
+          runtime.meshPeerAgentId ? `FA-${runtime.meshPeerAgentId}` : "—",
+          shortPubkey(runtime.meshPeerPubkey),
+        ),
+        metricCell("Your network ID", shortPubkey(runtime.nodePubkey), "ID for this device on the network"),
       ].join(""),
     ),
     dashboardMetricSection(
-      "Liquidity & channels",
-      "Outbound/inbound capacity and open mesh channels",
+      "Balances & payment links",
+      "What you can send or receive",
       [
         metricCell(
-          "Outbound liquidity",
+          "Sendable balance",
           formatShannons(runtime.totalLocalBalanceShannons ?? 0),
           formatFiatFromShannons(runtime.totalLocalBalanceShannons ?? 0, runtime.fiatConversionRate),
           { trend: (runtime.totalLocalBalanceShannons ?? 0) > 0 },
         ),
         metricCell(
-          "Inbound liquidity",
+          "Receivable balance",
           formatShannons(runtime.totalRemoteBalanceShannons ?? 0),
           formatFiatFromShannons(runtime.totalRemoteBalanceShannons ?? 0, runtime.fiatConversionRate),
           { trend: (runtime.totalRemoteBalanceShannons ?? 0) > 0 },
         ),
         metricCell(
-          "Open channels",
+          "Payment links",
           `${runtime.meshChannelsActive ?? 0} / ${runtime.meshChannelsTotal ?? 0}`,
-          "Active payment channels",
+          "Open links ready for payments",
           { trend: (runtime.meshChannelsActive ?? 0) > 0 },
         ),
       ].join(""),
     ),
     dashboardMetricSection(
-      "Edge ledger",
-      "Settlements flowing through the sidecar edge store",
+      "Payment history",
+      "Payments recorded on this device",
       [
         metricCell(
-          "Settled edge tx",
-          formatCount(runtime.edgeSettled ?? 0, { label: "settlements" }),
-          "Confirmed ledger settlements",
+          "Completed payments",
+          formatCount(runtime.edgeSettled ?? 0, { label: "done" }),
+          "Fully confirmed",
           { trend: (runtime.edgeSettled ?? 0) > 0 },
         ),
         metricCell(
-          "Pending edge tx",
-          formatCount(runtime.edgePending, { label: "pending" }),
-          "Awaiting settlement",
+          "Waiting payments",
+          formatCount(runtime.edgePending, { label: "waiting" }),
+          "Still processing",
         ),
         metricCell(
-          "Failed edge tx",
+          "Failed payments",
           formatCount(runtime.edgeFailed ?? 0, { label: "failed" }),
-          "Rejected or rolled-back edge records",
+          "Cancelled or rejected",
         ),
         metricCell(
-          "Queued telemetry",
-          formatCount(runtime.queuedTelemetry, { label: "pulses" }),
-          "Offline MFA pulse backlog",
+          "Waiting to sync",
+          formatCount(runtime.queuedTelemetry, { label: "updates" }),
+          "Updates waiting while the hub is offline",
         ),
       ].join(""),
     ),
     dashboardMetricSection(
-      "Agent & modules",
-      "Hardware profile, running FSP modules, and runtime identity",
+      "This device",
+      "Device profile and installed tools",
       [
         metricCell("Active agent", formatAgentLabel(runtime), (runtime.hardwareProfile ?? "").replaceAll("_", " "), {
           trend: true,
         }),
         metricCell(
-          "Power profile",
+          "Performance mode",
           runtime.powerProfile ?? "—",
-          "Adaptive edge power controller",
+          "How hard this device is working",
           { trend: runtime.powerProfile === "AggressiveRealTime" },
         ),
-        metricCell("Sidecar profile", runtime.sidecarProfile ?? "unknown", runtime.profileSource ?? "profile"),
-        metricCell("Running modules", mounted.join(", ") || "none", runningHint),
+        metricCell("App profile", runtime.sidecarProfile ?? "unknown", "Which tools this device is set up for"),
+        metricCell("Active tools", friendlyModuleList(mounted), runningHint),
         ...(mounted.includes("dicoba") && runtime.dicobaMemberId
           ? [
               metricCell(
-                "DiCoBa member ID",
+                "Your DiCoBa ID",
                 shortMemberId(runtime.dicobaMemberId),
                 runtime.dicobaMemberId,
                 { trend: true },
@@ -318,15 +362,15 @@ export function renderDashboardStats(runtime) {
   const profileBanner =
     runtime && mounted.length === 0
       ? `<div class="dashboard-banner dashboard-banner-warn" role="status">
-          No FSP modules are <strong>running</strong> on this sidecar.
-          Install or resume modules from <strong>App Store</strong>, or switch to a profile that mounts kiosk/coop/full modules.
+          No tools are <strong>running</strong> on this device.
+          Open <strong>App Store</strong> to install tools, or switch the device profile.
         </div>`
       : "";
 
   const mfaOobBanner =
     runtime && !runtime.mfaControlConnected
       ? `<div class="dashboard-banner dashboard-banner-warn" role="status">
-          MFA control plane is not registered — use <strong>FSP Out-of-Band</strong> below to relay peer module packets offline.
+          Hub is offline — use <strong>Send offline</strong> below to share actions by QR or link.
         </div>`
       : "";
 
@@ -334,17 +378,17 @@ export function renderDashboardStats(runtime) {
     <section class="dashboard-page" data-dashboard-stats>
       <header class="dashboard-hero">
         <div class="dashboard-hero-copy">
-          <p class="dashboard-eyebrow">Operations console</p>
-          <h1>Fiber Sidecar</h1>
+          <p class="dashboard-eyebrow">Overview</p>
+          <h1>Fiber Agent</h1>
           <p>
-            Live health for ${agentLabel}: FNN pairing, edge ledger, and regional clearing telemetry.
-            Float-crisis posts route to MFA; balance depletion triggers EnterpriseClearinghouse refuel.
+            Live status for ${agentLabel}: connections, balances, and payment sync.
+            If cash on hand runs low, the hub can arrange a refill.
           </p>
           ${renderStatusPills(runtime)}
           <div class="dashboard-hero-actions">
             <button type="button" class="hero-btn hero-btn-primary" data-action="refresh-dashboard-stats">
               ${icon("dashboard", 16)}
-              Refresh stats
+              Refresh
             </button>
             <button type="button" class="hero-btn" data-navigate="fa-app-store">
               ${icon("appStore", 16)}

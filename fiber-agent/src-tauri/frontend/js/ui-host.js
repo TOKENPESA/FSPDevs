@@ -20,9 +20,9 @@ import { modulesForMounted } from "./module-registry.js";
 
 const MODULES_ROOT = {
   id: "modules",
-  label: "Module",
+  label: "Tools",
   icon: "modules",
-  hint: "Mounted sidecar modules",
+  hint: "Installed tools on this device",
 };
 
 /**
@@ -148,7 +148,7 @@ export class SidecarUiHost {
         type: "dashboard",
         label: "Dashboard",
         icon: "dashboard",
-        hint: "Sidecar summary and stats",
+        hint: "Overview and live status",
       },
       ...this.panelRoutes,
     ];
@@ -330,7 +330,7 @@ export class SidecarUiHost {
   renderDashboard() {
     if (!this.contentEl) return;
     this.contentEl.innerHTML = `
-      <div class="dashboard-loading" data-dashboard-loading>Loading sidecar stats…</div>
+      <div class="dashboard-loading" data-dashboard-loading>Loading your dashboard…</div>
     `;
 
     void this.paintDashboard();
@@ -351,7 +351,7 @@ export class SidecarUiHost {
       onRefresh: () => {
         if (!this.contentEl) return;
         this.contentEl.innerHTML = `
-          <div class="dashboard-loading" data-dashboard-loading>Loading sidecar stats…</div>
+          <div class="dashboard-loading" data-dashboard-loading>Loading your dashboard…</div>
         `;
         void this.paintDashboard();
       },

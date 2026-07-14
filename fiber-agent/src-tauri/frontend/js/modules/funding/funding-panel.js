@@ -5,12 +5,12 @@ import { fundingPanelMarkup, mountFundingPanel } from "../../funding.js";
 /** @type {SidecarPanel} */
 export const fundingPanel = {
   id: "fa-funding",
-  title: "Global Funding Onboarding",
-  navLabel: "Funding",
+  title: "Add funds",
+  navLabel: "Add funds",
   navIcon: "funding",
-  badge: "phase-e",
+  badge: "Setup",
   navDescription:
-    "Fund the local FNN with Nervos faucet CKB or JoyID passkey via CCC",
+    "Use JoyID or the faucet to add test coins so you can open payment links",
   render() {
     return fundingPanelMarkup();
   },

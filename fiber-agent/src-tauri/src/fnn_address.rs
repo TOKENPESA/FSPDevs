@@ -107,7 +107,7 @@ pub async fn get_fnn_address(
     host: State<'_, Arc<TokioMutex<SidecarHost>>>,
 ) -> Result<FnnAddressSnapshot, String> {
     let agent_id = host.lock().await.agent_id;
-    let fnn_mode = std::env::var("FNN_MODE").unwrap_or_else(|_| "simulate".to_string());
+    let fnn_mode = std::env::var("FNN_MODE").unwrap_or_else(|_| "testnet".to_string());
     let is_live =
         fnn_mode.eq_ignore_ascii_case("testnet") || fnn_mode.eq_ignore_ascii_case("live");
     let fnn_rpc_url =

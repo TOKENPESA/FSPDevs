@@ -21,25 +21,24 @@ import {
 /** @type {SidecarPanel} */
 export const savingsPanel = {
   id: "dicoba-savings",
-  title: "DICOBA Collective Savings",
-  navLabel: "Collective Savings",
+  title: "Group savings",
+  navLabel: "Savings",
   navIcon: "savings",
-  badge: "dicoba / stream_micro_contribution",
-  navDescription:
-    "Stream micro-contributions into approved JunguKuu group vaults",
+  badge: "Savings",
+  navDescription: "Add money to your group savings",
   render() {
     return `
       <div class="module-workspace-inner" data-panel="dicoba-savings">
         <div class="workspace-card">
           <div class="input-group">
-            <label>Target Group JunguKuu Vault Name</label>
+            <label>Group vault name</label>
             <input type="text" data-dicoba-vault-name value="${vaultState.groupName}">
           </div>
           <div class="input-group">
-            <label>Contribution Amount (Fiat)</label>
+            <label>Amount (TZS)</label>
             <input type="number" data-dicoba-contribution value="2500">
           </div>
-          <button type="button" class="primary-btn" data-action="dicoba-contribute">Stream Micro-Contribution</button>
+          <button type="button" class="primary-btn" data-action="dicoba-contribute">Add contribution</button>
           <div class="receipt-log" data-dicoba-savings-log style="display:none;"></div>
         </div>
         <div data-vault-contributors-host></div>
@@ -78,8 +77,7 @@ export const savingsPanel = {
 
         if (log instanceof HTMLElement) {
           log.style.display = "block";
-          log.innerHTML =
-            "⚡ Initializing off-chain multi-hop micropayment stream...";
+          log.innerHTML = "Sending your contribution…";
         }
 
         try {
@@ -91,7 +89,7 @@ export const savingsPanel = {
             })
           );
           if (log instanceof HTMLElement) {
-            log.innerHTML = `✅ <strong>Stream Succeeded</strong><br>Vault: ${escapeHtml(vaultState.groupName)}<br>Tx ID: ${escapeHtml(String(receipt.transaction_id))}<br>Member: ${escapeHtml(String(receipt.member_id))}<br>Value: ${escapeHtml(String(receipt.amount_shannons))} Shannons<br>Timestamp: ${escapeHtml(new Date(Number(receipt.timestamp) * 1000).toLocaleTimeString())}`;
+            log.innerHTML = `✅ <strong>Contribution sent</strong><br>Vault: ${escapeHtml(vaultState.groupName)}<br>Reference: ${escapeHtml(String(receipt.transaction_id))}<br>Member: ${escapeHtml(String(receipt.member_id))}<br>Amount: ${escapeHtml(String(amount))} TZS<br>Time: ${escapeHtml(new Date(Number(receipt.timestamp) * 1000).toLocaleTimeString())}`;
           }
           await syncVaultTransparency();
           await repaintStats();
@@ -99,7 +97,7 @@ export const savingsPanel = {
           refreshLoanPanel?.();
         } catch (error) {
           if (log instanceof HTMLElement) {
-            log.innerHTML = `❌ <strong>Execution Failure:</strong> ${escapeHtml(errorMessage(error))}`;
+            log.innerHTML = `❌ <strong>Couldn't complete contribution:</strong> ${escapeHtml(errorMessage(error))}`;
           }
         }
       });

@@ -14,8 +14,10 @@ pub const AGENT_TIMESTAMP_HEADER: &str = "X-MFA-Timestamp";
 
 /// Live testnet MFA host (TLS). Sidecars/mobile default here to avoid cleartext blocks.
 pub const DEFAULT_MFA_HOST: &str = "mfa.fsprotocol.com";
+/// Live FNN path (real node JSON-RPC). Override with `FNN_MODE=simulate` for local mocks.
+pub const DEFAULT_FNN_MODE: &str = "testnet";
 
-/// Apply production MFA endpoint defaults when env vars are unset.
+/// Apply production MFA + FNN defaults when env vars are unset.
 /// Safe for Android/iOS (no cleartext HTTP to the control plane).
 pub fn apply_secure_mfa_env_defaults() {
     if std::env::var("MFA_HOST").is_err() {
@@ -23,6 +25,9 @@ pub fn apply_secure_mfa_env_defaults() {
     }
     if std::env::var("MFA_WS_SECURE").is_err() {
         std::env::set_var("MFA_WS_SECURE", "true");
+    }
+    if std::env::var("FNN_MODE").is_err() {
+        std::env::set_var("FNN_MODE", DEFAULT_FNN_MODE);
     }
 }
 

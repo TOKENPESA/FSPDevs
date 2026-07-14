@@ -69,8 +69,8 @@ export function formatAgentLabel(runtime) {
 
 /** @param {SidecarRuntimeStats | null | undefined} runtime @returns {string} */
 export function formatBrandSubtitle(runtime) {
-  if (!runtime?.agentId) return "FA— · loading";
-  const descriptor = (runtime.hardwareProfile ?? runtime.sidecarProfile ?? "edge")
+  if (!runtime?.agentId) return "Loading…";
+  const descriptor = (runtime.hardwareProfile ?? runtime.sidecarProfile ?? "agent")
     .replaceAll("_", " ");
   return `${formatAgentLabel(runtime)} · ${descriptor}`;
 }
@@ -79,9 +79,9 @@ export function formatBrandSubtitle(runtime) {
 export function formatBrandSubtitleError(error) {
   const message = errorMessage(error);
   if (/tauri runtime unavailable/i.test(message)) {
-    return "FA— · desktop shell required";
+    return "Open the desktop app";
   }
-  return "FA— · stats unavailable";
+  return "Status unavailable";
 }
 
 /**
@@ -176,13 +176,18 @@ export function applyRuntimeToFloatPanel(panel, runtime) {
     );
   }
   if (floorHint) {
-    floorHint.textContent = `Critical floor: ${Math.round(runtime.criticalFiatFloor ?? 50_000).toLocaleString()} TZS · MFA ${runtime.mfaConnectionStatus} · ${runtime.mfaHost}`;
+    const floor = Math.round(runtime.criticalFiatFloor ?? 50_000).toLocaleString();
+    const hubOk =
+      runtime.mfaControlConnected === true ||
+      String(runtime.mfaConnectionStatus ?? "").toLowerCase().includes("connect");
+    const hubLabel = hubOk ? "Hub online" : "Hub offline";
+    floorHint.textContent = `Alert if cash falls below ${floor} TZS · ${hubLabel}`;
   }
   if (peerHint) {
     const peerId = runtime.meshPeerAgentId;
     peerHint.textContent = peerId
-      ? `Default customer synced from mesh peer FA-${peerId}`
-      : "Set a customer FNN pubkey for cash-in routing";
+      ? `Customer ID filled from partner FA-${peerId}`
+      : "Enter a customer network ID if it is not filled in automatically";
   }
 }
 

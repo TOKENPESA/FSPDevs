@@ -47,47 +47,47 @@ function totalAtomicFromTx(tx) {
 /** @type {SidecarPanel} */
 export const floatPanel = {
   id: "fiat-bridge-float",
-  title: "Mobile Float Operations",
-  navLabel: "Float & Cash-In",
+  title: "Cash reserves & deposits",
+  navLabel: "Cash & deposits",
   navIcon: "float",
-  badge: "fiat_bridge / process_cash_in",
+  badge: "Cash-in",
   navDescription:
-    "Monitor telco float reserves, process cash-in, and dispatch crisis clearing",
+    "Track cash on hand, record deposits, and request a refill if low",
   render() {
     return `
       <div class="module-workspace-inner" data-panel="fiat-bridge-float">
         <div class="workspace-card">
-          <h2 class="workspace-section-title">Float Reserve</h2>
+          <h2 class="workspace-section-title">Cash on hand</h2>
           <div class="input-group">
-            <label>Active Telco Float Reserve (TZS)</label>
+            <label>Cash reserve (TZS)</label>
             <input type="number" data-float-reserve value="50000">
           </div>
           <div class="liquidity-bar" aria-hidden="true">
             <div class="liquidity-fill local" data-float-fill-local style="width:65%"></div>
             <div class="liquidity-fill remote" data-float-fill-remote style="width:35%"></div>
           </div>
-          <p class="panel-hint" data-float-summary>Syncing float from FNN outbound liquidity…</p>
-          <p class="panel-hint" data-critical-floor-hint>Critical floor: 50,000 TZS</p>
-          <button type="button" class="primary-btn" data-action="float-rebalance">Run Float Crisis Check</button>
+          <p class="panel-hint" data-float-summary>Updating cash levels from your balance…</p>
+          <p class="panel-hint" data-critical-floor-hint>Alert if cash falls below 50,000 TZS</p>
+          <button type="button" class="primary-btn" data-action="float-rebalance">Check if refill is needed</button>
           <div class="receipt-log" data-clearing-log style="display:none;"></div>
         </div>
 
         <div class="workspace-card">
-          <h2 class="workspace-section-title">Cash-In Routing</h2>
+          <h2 class="workspace-section-title">Customer deposit</h2>
           <div class="input-group">
-            <label>Customer FNN Pubkey</label>
-            <input type="text" data-cash-in-pubkey placeholder="Synced from mesh peer…">
+            <label>Customer network ID</label>
+            <input type="text" data-cash-in-pubkey placeholder="Filled from partner when available…">
             <span class="panel-hint" data-mesh-peer-hint></span>
           </div>
           <div class="input-group">
-            <label>Amount (Shannons / RUSD atomic)</label>
+            <label>Network amount</label>
             <input type="number" data-cash-in-shannons value="1000000">
           </div>
           <div class="input-group">
-            <label>Fiat Received (TZS)</label>
+            <label>Cash received (TZS)</label>
             <input type="number" data-cash-in-fiat value="38000">
           </div>
-          <button type="button" class="primary-btn" data-action="cash-in-submit">Process Cash-In</button>
+          <button type="button" class="primary-btn" data-action="cash-in-submit">Record deposit</button>
           <div class="receipt-log" data-cash-in-log style="display:none;"></div>
         </div>
       </div>
@@ -137,7 +137,7 @@ export const floatPanel = {
       const localPct = Math.min(Math.max((localShannons / total) * 100, 15), 85);
       fillLocal.style.width = `${localPct}%`;
       fillRemote.style.width = `${100 - localPct}%`;
-      summary.textContent = `Local float: ${currentFiat.toLocaleString()} TZS · FNN outbound ${localShannons.toLocaleString()} shannons · inbound ${remoteShannons.toLocaleString()} shannons`;
+      summary.textContent = `Cash on hand: ${currentFiat.toLocaleString()} TZS · You can send ${localShannons.toLocaleString()} · You can receive ${remoteShannons.toLocaleString()}`;
     };
 
     const paintFromRuntime = (/** @type {SidecarRuntimeStats | null} */ activeRuntime) => {
@@ -166,16 +166,22 @@ export const floatPanel = {
     };
 
     const unlistenFloat = await onTauriEvent("float-crisis", (/** @type {unknown} */ payload) => {
-      appendClearing(`🚨 [FLOAT CRISIS] TelemetryPacket queued · ${typeof payload === "string" ? payload : JSON.stringify(payload)}`);
+      const detail =
+        typeof payload === "string"
+          ? payload
+          : payload && typeof payload === "object"
+            ? "saved on this device"
+            : "";
+      appendClearing(`Low cash alert saved${detail ? ` · ${detail}` : ""}`);
     });
     const unlistenDispatch = await onTauriEvent("clearing-dispatch", (payload) => {
       const record = /** @type {Record<string, unknown>} */ (payload ?? {});
       const status = record.status ?? "DISPATCHED";
       if (status === "MFA_OFFLINE") {
-        appendClearing("📡 [REGIONAL CLEARING] Float-crisis posted — MFA offline, telemetry queued locally");
+        appendClearing("Hub offline — refill request saved on this device");
       } else {
-        appendClearing(`✅ [REGIONAL CLEARING] MFA float-crisis intake accepted (status: ${status})`);
-        appendClearing("🏦 [ENTERPRISE CLEARING] BalanceDepleted refuel handled by EnterpriseClearinghouse on supervisor");
+        appendClearing("Hub received your low-cash alert");
+        appendClearing("A refill has been requested for this shop");
       }
     });
 
@@ -194,10 +200,10 @@ export const floatPanel = {
         const currentFiat = Number(
           shannonsToFiatMinor(parseFiatMinorUnits(reserveInput.value, "fiat"), conversionRate(runtime)),
         );
-        setLogHtml(log, "⚙️ Evaluating float drain velocity against critical floor…");
+        setLogHtml(log, "Checking if your cash is running low…");
         if (clearingLog instanceof HTMLElement) {
           clearingLog.style.display = "block";
-          clearingLog.innerHTML = "Dispatching regional float-crisis telemetry to MFA…";
+          clearingLog.innerHTML = "Sending refill request to the hub…";
         }
         try {
           const message = await triggerManualFiatRebalance({
@@ -205,11 +211,14 @@ export const floatPanel = {
             digitalL2BalanceShannons: runtime?.totalLocalBalanceShannons ?? 0,
           });
           const isSafe = message.includes("within safe bounds");
+          const friendly = isSafe
+            ? "Cash looks healthy — no refill needed right now"
+            : message.replace(/float[- ]crisis/gi, "low cash").replace(/\bMFA\b/g, "hub");
           const iconLabel = isSafe ? "✓" : "⚠️";
-          setLogHtml(log, `${iconLabel} ${escapeHtml(message)}`);
+          setLogHtml(log, `${iconLabel} ${escapeHtml(friendly)}`);
           await repaintStats?.();
         } catch (error) {
-          setLogHtml(log, `❌ Float crisis check failed: ${escapeHtml(errorMessage(error))}`);
+          setLogHtml(log, `Could not check cash levels: ${escapeHtml(errorMessage(error))}`);
         }
       });
 
@@ -227,7 +236,7 @@ export const floatPanel = {
         if (!customerPubkey || !amountShannons) {
           setLogHtml(
             log,
-            "❌ Customer pubkey and shannon amount are required. Sync runtime or enter a mesh peer pubkey.",
+            "Enter a customer network ID and network amount, or wait for a partner ID to sync.",
           );
           return;
         }
@@ -236,7 +245,7 @@ export const floatPanel = {
           pubkeyInput.value = customerPubkey;
         }
 
-        setLogHtml(log, "📥 Routing cash-in through FNN loopback…");
+        setLogHtml(log, "Recording deposit…");
 
         try {
           const tx = /** @type {Record<string, string | number>} */ (
@@ -249,13 +258,13 @@ export const floatPanel = {
           const counterparty = String(tx.counterparty_pubkey ?? "");
           setLogHtml(
             log,
-            `✅ <strong>Cash-In Recorded</strong><br>Tx: ${escapeHtml(String(tx.tx_id))}<br>Customer: ${escapeHtml(counterparty.slice(0, 12))}…<br>Amount: ${escapeHtml(totalAtomicFromTx(tx).toLocaleString())} shannons · ${escapeHtml(Number(tx.fiat_amount).toLocaleString())} TZS`,
+            `✓ <strong>Deposit recorded</strong><br>Receipt: ${escapeHtml(String(tx.tx_id))}<br>Customer: ${escapeHtml(counterparty.slice(0, 12))}…<br>Amount: ${escapeHtml(totalAtomicFromTx(tx).toLocaleString())} network units · ${escapeHtml(Number(tx.fiat_amount).toLocaleString())} TZS`,
           );
           runtime = await loadSidecarRuntime({ force: true });
           paintFromRuntime(runtime);
           await repaintStats?.();
         } catch (error) {
-          setLogHtml(log, `❌ Cash-in failed: ${escapeHtml(errorMessage(error))}`);
+          setLogHtml(log, `Deposit failed: ${escapeHtml(errorMessage(error))}`);
         }
       });
 

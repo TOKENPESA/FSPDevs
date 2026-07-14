@@ -26,21 +26,13 @@ const log = createLogger("fiat-bridge");
 
 /** @param {FiatBridgeStatsSnapshot} snapshot @returns {string} */
 function mfaStatusHint(snapshot) {
-
   if (snapshot.mfaControlConnected) {
-
-    return `Registered · ${snapshot.mfaWsUrl ?? snapshot.mfaHost}`;
-
+    return "Hub connected";
   }
-
   if (snapshot.mfaReachable) {
-
-    return `Reachable only · ${snapshot.mfaWsUrl ?? "WS pending"}`;
-
+    return "Hub reachable — still signing in";
   }
-
-  return `Unreachable · ${snapshot.mfaHost ?? "mfa.fsprotocol.com"}`;
-
+  return "Can't reach the hub right now";
 }
 
 
@@ -123,93 +115,49 @@ export function renderFiatBridgeStats(snapshot) {
   const cells = [
 
     metricCell(
-
-      "Bridge Tx",
-
+      "Deposits",
       formatCount(snapshot.fiatEdgeTransactions, { label: "records" }),
-
-      "Cash-in and float records",
-
+      "Cash deposits and transfers recorded",
     ),
-
     metricCell(
-
       "Pending",
-
       formatCount(snapshot.edgePending, { label: "pending" }),
-
-      "Awaiting confirmation",
-
+      "Waiting for confirmation",
     ),
-
     metricCell(
-
-      "Settled",
-
-      formatCount(snapshot.edgeSettled, { label: "settlements" }),
-
-      "Confirmed settlements",
-
+      "Completed",
+      formatCount(snapshot.edgeSettled, { label: "completed" }),
+      "Confirmed transfers",
       { trend: snapshot.edgeSettled > 0 },
-
     ),
-
     metricCell(
-
       "Failed",
-
       formatCount(snapshot.edgeFailed, { label: "failed" }),
-
-      "Rejected edge records",
-
+      "Could not complete",
     ),
-
     metricCell(
-
-      "Module",
-
-      snapshot.mounted ? "Mounted" : "Unavailable",
-
+      "Cash desk",
+      snapshot.mounted ? "Ready" : "Unavailable",
       mfaStatusHint(snapshot),
-
       { trend: snapshot.mounted && snapshot.mfaControlConnected },
-
     ),
-
     metricCell(
-
-      "Outbound",
-
+      "You can send",
       formatShannons(snapshot.localLiquidity),
-
-      "FNN local liquidity",
-
+      "Balance available to send",
       { trend: snapshot.localLiquidity > 0 },
-
     ),
-
     metricCell(
-
-      "Telemetry Queue",
-
-      formatCount(snapshot.queuedTelemetry, { label: "pulses" }),
-
-      "Posts to MFA /telemetry when offline",
-
+      "Waiting to sync",
+      formatCount(snapshot.queuedTelemetry, { label: "updates" }),
+      "Saved until the hub reconnects",
     ),
-
   ].join("");
 
-
-
-  return metricSection("Mobile Money", cells, {
-
-    hint: "Regional float-crisis + enterprise refuel telemetry",
-
+  return metricSection("Cash & mobile money", cells, {
+    hint: "Deposits, cash on hand, and hub sync",
     actionHtml: `<button type="button" class="refresh-btn refresh-btn-inline" data-action="refresh-fiat-stats">Refresh</button>`,
-
   });
-
 }
 
 

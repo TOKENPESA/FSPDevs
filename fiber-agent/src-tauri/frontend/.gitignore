@@ -1,0 +1,4 @@
+# Tauri forbids `node_modules` under frontendDist — keep this folder asset-only.
+node_modules/
+package.json
+package-lock.json

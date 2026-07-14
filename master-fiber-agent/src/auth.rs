@@ -18,21 +18,47 @@ pub const AGENT_TIMESTAMP_HEADER: &str = "X-MFA-Timestamp";
 const AGENT_HANDSHAKE_MAX_SKEW_SECS: u64 = 300;
 
 /// Allowed Origin values for agent and monitor WebSocket upgrades (CSWSH defense).
-/// Loopback hosts are always permitted; additional hosts require `MFA_WS_ALLOWED_ORIGINS`.
+/// Loopback HTTP origins are always permitted for native sidecars; additional hosts
+/// require `MFA_WS_ALLOWED_ORIGINS` (full origin URL and/or bare hostname).
 pub fn is_allowed_ws_origin(origin_str: &str) -> bool {
-    let Some(rest) = origin_str.strip_prefix("http://") else {
+    let Some(rest) = origin_str
+        .strip_prefix("https://")
+        .or_else(|| origin_str.strip_prefix("http://"))
+    else {
         return false;
     };
     let (host, _) = rest.rsplit_once(':').unwrap_or((rest, ""));
-
-    let dev_mode = std::env::var("MFA_DEV_MODE").unwrap_or_default() == "true";
-    if dev_mode && (host == "127.0.0.1" || host == "localhost" || host == "[::1]") {
+    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "[::1]";
+    // Native Fiber Agent sidecars always send loopback Origin on the WS upgrade.
+    if is_loopback && origin_str.starts_with("http://") {
         return true;
     }
 
-    // Explicit configurations only; no fallback LAN tracking allowed
+    let dev_mode = std::env::var("MFA_DEV_MODE").unwrap_or_default() == "true";
+    if dev_mode && is_loopback {
+        return true;
+    }
+
+    // Match full origin URL or bare host from the allowlist env.
     if let Ok(allowed_env) = std::env::var("MFA_WS_ALLOWED_ORIGINS") {
-        return allowed_env.split(',').any(|configured| configured.trim() == host);
+        return allowed_env.split(',').any(|configured| {
+            let configured = configured.trim();
+            if configured.is_empty() {
+                return false;
+            }
+            if configured == origin_str || configured == host {
+                return true;
+            }
+            configured
+                .strip_prefix("https://")
+                .or_else(|| configured.strip_prefix("http://"))
+                .map(|without_scheme| {
+                    let (allowed_host, _) =
+                        without_scheme.rsplit_once(':').unwrap_or((without_scheme, ""));
+                    allowed_host == host
+                })
+                .unwrap_or(false)
+        });
     }
 
     false
@@ -308,9 +334,21 @@ mod tests {
         assert!(is_allowed_ws_origin("http://127.0.0.1:9999"));
         std::env::remove_var("MFA_DEV_MODE");
         std::env::remove_var("MFA_WS_ALLOWED_ORIGINS");
-        assert!(!is_allowed_ws_origin("http://127.0.0.1:8088"));
+        // Native sidecars always use loopback Origin — allowed without MFA_DEV_MODE.
+        assert!(is_allowed_ws_origin("http://127.0.0.1:8088"));
+        assert!(!is_allowed_ws_origin("https://evil.example"));
+        std::env::set_var(
+            "MFA_WS_ALLOWED_ORIGINS",
+            "https://mfa.fsprotocol.com,app.example",
+        );
+        assert!(is_allowed_ws_origin("https://mfa.fsprotocol.com"));
+        assert!(is_allowed_ws_origin("https://app.example:443"));
+        assert!(!is_allowed_ws_origin("https://evil.example"));
+        std::env::remove_var("MFA_WS_ALLOWED_ORIGINS");
         if let Some(value) = prev_dev {
             std::env::set_var("MFA_DEV_MODE", value);
+        } else {
+            std::env::remove_var("MFA_DEV_MODE");
         }
         if let Some(value) = prev_ws {
             std::env::set_var("MFA_WS_ALLOWED_ORIGINS", value);

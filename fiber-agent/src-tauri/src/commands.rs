@@ -207,7 +207,7 @@ pub async fn get_sidecar_stats(
         .map_err(|_| "hardware profile lock poisoned".to_string())?
         .0;
 
-    let fnn_mode = std::env::var("FNN_MODE").unwrap_or_else(|_| "simulate".to_string());
+    let fnn_mode = std::env::var("FNN_MODE").unwrap_or_else(|_| "testnet".to_string());
     let is_simulate = fnn_mode.eq_ignore_ascii_case("simulate") || fnn_mode.eq_ignore_ascii_case("sim");
     let fnn_rpc_url = resolve_fnn_rpc_url(host.agent_id);
     let fnn_p2p_endpoint = fnn_p2p_multiaddr(host.agent_id);

@@ -6,10 +6,9 @@ import { floatPanel } from "./float-panel.js";
 /** @type {SidecarModule} */
 export default {
   id: "fiat_bridge",
-  label: "Mobile Money Float Bridge",
-  navLabel: "Mobile Money",
+  label: "Mobile money",
+  navLabel: "Mobile money",
   navIcon: "mobile",
-  navDescription:
-    "Telco float bridge, cash-in routing, and fee estimation",
+  navDescription: "Cash reserves, customer deposits, and fee preview",
   panels: [floatPanel, feePanel],
 };

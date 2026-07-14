@@ -318,14 +318,27 @@ pub async fn run_agent_sidecar(agent_id: u16, config: SidecarConfig) {
 }
 
 /// Keeps the sidecar registered in MFA's peer registry via `/ws/:agent_id`.
+///
+/// Prefer `ws_token_override` (MFA-issued HMAC secret from `/api/register`).
+/// Falls back to `MFA_AGENT_WS_TOKEN` / persisted identity row for this agent id.
 pub fn spawn_sidecar_mfa_control_ws(
     agent_id: u16,
     fnn_client: Arc<dyn FiberNodeRpc + Send + Sync>,
     db: Arc<AgentDb>,
     peer_outbound_rx: Option<mpsc::Receiver<PeerModulePacket>>,
     sys_broadcast_rx: Option<mpsc::Receiver<String>>,
+    ws_token_override: Option<String>,
 ) {
-    let config = SidecarConfig::from_env();
+    let mut config = SidecarConfig::from_env();
+    if let Some(secret) = ws_token_override.filter(|s| s.len() >= 16) {
+        config.ws_token = secret;
+    } else if let Ok(identity_db) = AgentDb::open_path(resolve_identity_db_path()) {
+        if let Ok(Some(stored)) = identity_db.load_agent_identity() {
+            if stored.agent_id_numeric == agent_id && stored.agent_secret.len() >= 16 {
+                config.ws_token = stored.agent_secret;
+            }
+        }
+    }
     let mfa_ws_url = mfa_control_ws_url(agent_id, &config.mfa_host);
     let fnn_backend = Arc::new(Mutex::new(
         Box::new(ArcFnnBackend(fnn_client)) as Box<dyn FiberNodeRpc + Send + Sync>

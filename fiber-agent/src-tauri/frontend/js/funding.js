@@ -6,26 +6,40 @@ import { getFnnAddress, hasTauri, openExternalUrl } from "./sidecar-api.js";
 const log = createLogger("funding");
 
 const FAUCET_URL = "https://faucet.nervos.org/";
+/** JoyID passkey portal (testnet). */
+const JOYID_TESTNET_URL = "https://testnet.joyid.dev";
 /** CKB → shannons (1 CKB = 10^8 shannons). */
 const SHANNONS_PER_CKB = 100_000_000n;
 /** Default JoyID → sidecar funding amount (whole CKB). */
 const DEFAULT_FUND_CKB = 100;
+const APP_NAME = "FSP Sidecar";
+/** Public HTTPS icon for JoyID dapp metadata (data: URLs are rejected by some builds). */
+const APP_ICON = "https://cdn.jsdelivr.net/gh/nervosnetwork/neuron@master/packages/neuron-wallet/assets/icons/icon.png";
 
 /** @type {string} */
 let cachedAddress = "";
 /** @type {Record<string, unknown> | null} */
 let cachedLockScript = null;
+/** @type {any} */
+let activeJoySigner = null;
+/** @type {string} */
+let connectedWalletLabel = "";
 
 /**
- * Lazy-load CCC modules via the HTML import map (esm.sh fallback).
- * @returns {Promise<{ ccc: any, connectorReady: boolean }>}
+ * Lazy-load CCC + JoyID modules via the HTML import map (esm.sh fallback).
+ * @returns {Promise<{ ccc: any, CkbSigner: any, connectorReady: boolean }>}
  */
 async function loadCcc() {
-  const [{ ccc }, connector] = await Promise.all([
+  const [{ ccc }, joyMod, connector] = await Promise.all([
     import("@ckb-ccc/core"),
+    import("@ckb-ccc/joy-id").catch(() => null),
     import("@ckb-ccc/connector").catch(() => null),
   ]);
-  return { ccc, connectorReady: Boolean(connector) };
+  const CkbSigner =
+    joyMod?.JoyId?.CkbSigner ??
+    joyMod?.CkbSigner ??
+    null;
+  return { ccc, CkbSigner, connectorReady: Boolean(connector) };
 }
 
 /**
@@ -42,6 +56,23 @@ function setStatus(root, message, tone = "info") {
 
 /**
  * @param {HTMLElement} root
+ * @param {{ connected: boolean, label?: string }} state
+ */
+function paintWalletChip(root, state) {
+  const chip = root.querySelector("[data-funding-wallet]");
+  if (!(chip instanceof HTMLElement)) return;
+  chip.dataset.connected = state.connected ? "true" : "false";
+  chip.textContent = state.connected
+    ? state.label || "JoyID connected"
+    : "Passkey not connected";
+  const cta = root.querySelector("[data-action='funding-joyid']");
+  if (cta instanceof HTMLButtonElement) {
+    cta.textContent = state.connected ? "Send with JoyID" : "Continue with JoyID";
+  }
+}
+
+/**
+ * @param {HTMLElement} root
  * @param {{ address: string, pubkey?: string, source?: string, network?: string, fundingLockScript?: Record<string, unknown> }} snapshot
  */
 function paintAddress(root, snapshot) {
@@ -51,23 +82,52 @@ function paintAddress(root, snapshot) {
   if (addrEl) addrEl.textContent = snapshot.address;
   const metaEl = root.querySelector("[data-funding-meta]");
   if (metaEl) {
-    const parts = [
-      snapshot.network ?? "testnet",
-      snapshot.source ?? "fnn",
-      snapshot.pubkey ? `pubkey ${String(snapshot.pubkey).slice(0, 12)}…` : null,
-    ].filter(Boolean);
-    metaEl.textContent = parts.join(" · ");
+    const network =
+      snapshot.network === "testnet" || !snapshot.network
+        ? "test coins"
+        : String(snapshot.network);
+    const source =
+      snapshot.source === "simulated"
+        ? "demo"
+        : snapshot.source === "fnn"
+          ? "live"
+          : snapshot.source
+            ? String(snapshot.source)
+            : "live";
+    metaEl.textContent = [network, source].filter(Boolean).join(" · ");
   }
+}
+
+/**
+ * @param {HTMLElement} root
+ * @returns {bigint}
+ */
+function readAmountCkb(root) {
+  const amountInput = root.querySelector("[data-funding-amount]");
+  const rawAmount =
+    amountInput instanceof HTMLInputElement ? amountInput.value.trim() : String(DEFAULT_FUND_CKB);
+  return parseAtomicInt(rawAmount, "CKB");
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {bigint} next
+ */
+function writeAmountCkb(root, next) {
+  const amountInput = root.querySelector("[data-funding-amount]");
+  if (!(amountInput instanceof HTMLInputElement)) return;
+  const safe = next < 1n ? 1n : next;
+  amountInput.value = safe.toString();
 }
 
 /**
  * @param {HTMLElement} root
  */
 export async function refreshFnnAddress(root) {
-  setStatus(root, "Fetching FNN funding address…", "info");
+  setStatus(root, "Loading your receive address…", "info");
   try {
     if (!hasTauri()) {
-      throw new Error("Tauri runtime unavailable — open the desktop sidecar shell");
+      throw new Error("Desktop app unavailable — open Fiber Agent to continue");
     }
     const snapshot = await getFnnAddress();
     paintAddress(root, {
@@ -80,13 +140,13 @@ export async function refreshFnnAddress(root) {
     setStatus(
       root,
       snapshot.source === "simulated"
-        ? "Simulate mode — address is display-only until FNN_MODE=testnet"
-        : "Address ready — claim faucet CKB or fund via JoyID",
+        ? "Demo mode — this address can't receive real test coins yet"
+        : "Address ready — claim free coins or send with JoyID",
       "ok",
     );
   } catch (error) {
     log.error("get_fnn_address failed", error);
-    setStatus(root, safeUserMessage(error, "Could not load FNN address"), "err");
+    setStatus(root, safeUserMessage(error, "Could not load receive address"), "err");
   }
 }
 
@@ -115,27 +175,161 @@ async function openFaucet(root) {
     await openExternalUrl(FAUCET_URL);
     setStatus(
       root,
-      "Opened Nervos faucet in your browser — paste the sidecar address to claim",
+      "Opened the faucet — paste the address above to claim free coins",
       "ok",
     );
   } catch (error) {
     log.error("open faucet failed", error);
-    setStatus(root, safeUserMessage(error, "Could not open faucet"), "err");
+    setStatus(root, safeUserMessage(error, "Could not open the faucet"), "err");
   }
 }
 
 /**
+ * Open JoyID portal in the system browser when in-app popups are blocked (common in WebViews).
  * @param {HTMLElement} root
- * @param {any} ccc
  */
-async function fundFromJoyId(root, ccc) {
-  const amountInput = root.querySelector("[data-funding-amount]");
-  const rawAmount =
-    amountInput instanceof HTMLInputElement ? amountInput.value.trim() : String(DEFAULT_FUND_CKB);
+async function openJoyIdPortal(root) {
+  try {
+    await openExternalUrl(JOYID_TESTNET_URL);
+    setStatus(
+      root,
+      "Opened JoyID in your browser — sign in, then return here to send",
+      "info",
+    );
+  } catch (error) {
+    log.error("open JoyID portal failed", error);
+    setStatus(root, safeUserMessage(error, "Could not open JoyID"), "err");
+  }
+}
+
+/**
+ * @param {any} ccc
+ * @param {any} CkbSigner
+ * @returns {Promise<any>}
+ */
+async function connectJoyIdSigner(ccc, CkbSigner) {
+  const client = new ccc.ClientPublicTestnet();
+  if (activeJoySigner && (await activeJoySigner.isConnected?.())) {
+    return activeJoySigner;
+  }
+  if (!CkbSigner) {
+    throw new Error("JoyID SDK failed to load — check network / esm.sh");
+  }
+  const signer = new CkbSigner(client, APP_NAME, APP_ICON);
+  if (!(await signer.isConnected())) {
+    await signer.connect();
+  }
+  activeJoySigner = signer;
+  try {
+    const addr = await signer.getInternalAddress?.();
+    connectedWalletLabel = addr ? `JoyID · ${String(addr).slice(0, 10)}…${String(addr).slice(-6)}` : "JoyID connected";
+  } catch {
+    connectedWalletLabel = "JoyID connected";
+  }
+  return signer;
+}
+
+/**
+ * Mount CCC wallet picker on document.body (never inside a transformed card).
+ * @returns {Promise<any>}
+ */
+async function openCccWalletPicker() {
+  await import("@ckb-ccc/connector");
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector("ccc-connector[data-funding-portal]");
+    existing?.remove();
+
+    const el = document.createElement("ccc-connector");
+    el.setAttribute("data-funding-portal", "1");
+    el.setAttribute("name", APP_NAME);
+    el.setAttribute("icon", APP_ICON);
+
+    const cleanup = () => {
+      el.removeEventListener("close", onClose);
+      el.remove();
+    };
+
+    const onClose = () => {
+      const signer = /** @type {any} */ (el).signer?.signer;
+      cleanup();
+      if (signer) {
+        activeJoySigner = signer;
+        connectedWalletLabel = /** @type {any} */ (el).wallet?.name
+          ? `${/** @type {any} */ (el).wallet.name} connected`
+          : "Wallet connected";
+        resolve(signer);
+        return;
+      }
+      reject(new Error("Wallet connection cancelled"));
+    };
+
+    el.addEventListener("close", onClose);
+    document.body.appendChild(el);
+  });
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {any} signer
+ * @param {any} ccc
+ * @param {bigint} ckbAmount
+ */
+async function sendCapacity(root, signer, ccc, ckbAmount) {
+  if (!cachedAddress) {
+    throw new Error("Load your receive address first");
+  }
+  const shannons = ckbAmount * SHANNONS_PER_CKB;
+  const ckbDisplay = ckbAmount.toString();
+  const client = signer.client ?? new ccc.ClientPublicTestnet();
+  const toAddr = await ccc.Address.fromString(cachedAddress, client);
+  const capacity = ccc.fixedPointFrom ? ccc.fixedPointFrom(ckbDisplay) : shannons;
+  let tx = ccc.Transaction.from({
+    outputs: [
+      {
+        lock: toAddr.script,
+        capacity,
+      },
+    ],
+  });
+
+  if (typeof signer.prepareTransaction === "function") {
+    tx = await signer.prepareTransaction(tx);
+  }
+  if (typeof tx.completeInputsByCapacity === "function") {
+    await tx.completeInputsByCapacity(signer);
+  } else if (typeof signer.completeInputs === "function") {
+    await signer.completeInputs(tx);
+  }
+  if (typeof tx.completeFeeBy === "function") {
+    await tx.completeFeeBy(signer);
+  } else if (typeof tx.completeFee === "function") {
+    await tx.completeFee(signer);
+  }
+
+  setStatus(root, "Approve on your device…", "info");
+  const txHash =
+    typeof signer.sendTransaction === "function"
+      ? await signer.sendTransaction(tx)
+      : await ccc.sendTransaction(signer, tx);
+
+  log.info("JoyID funding submitted", { txHash });
+  setStatus(
+    root,
+    `Sent ${ckbDisplay} CKB — payment submitted`,
+    "ok",
+  );
+}
+
+/**
+ * One-tap JoyID: connect (if needed) then transfer.
+ * @param {HTMLElement} root
+ * @param {{ ccc: any, CkbSigner: any }} api
+ */
+async function fundFromJoyId(root, api) {
   /** @type {bigint} */
   let ckbAmount;
   try {
-    ckbAmount = parseAtomicInt(rawAmount, "CKB");
+    ckbAmount = readAmountCkb(root);
   } catch (error) {
     setStatus(root, safeUserMessage(error, "Enter a whole positive CKB amount"), "err");
     return;
@@ -145,73 +339,51 @@ async function fundFromJoyId(root, ccc) {
     return;
   }
   if (!cachedAddress) {
-    setStatus(root, "Load the FNN address before funding", "err");
+    setStatus(root, "Load your receive address first", "err");
     return;
   }
 
-  setStatus(root, "Connecting JoyID / CCC signer…", "info");
+  setStatus(root, "Opening JoyID…", "info");
   try {
-    const client = new ccc.ClientPublicTestnet();
-    /** @type {any} */
-    let signer =
-      typeof ccc.getSigner === "function" ? await ccc.getSigner(client) : null;
-
-    if (!signer && typeof ccc.connector?.getConnectedSigner === "function") {
-      signer = await ccc.connector.getConnectedSigner(client);
-    }
-    if (!signer) {
-      const signerFactory = ccc.Signer?.fromClient ?? ccc.Wallet?.findSigner;
-      if (typeof signerFactory === "function") {
-        signer = await signerFactory(client);
-      }
-    }
-    if (!signer) {
-      throw new Error(
-        "No CCC signer connected — use the Connect wallet control, then try again",
-      );
-    }
-
-    const shannons = ckbAmount * SHANNONS_PER_CKB;
-    const ckbDisplay = ckbAmount.toString();
-    const toAddr = await ccc.Address.fromString(cachedAddress, client);
-    const tx = ccc.Transaction.from({
-      outputs: [
-        {
-          lock: toAddr.script,
-          capacity: ccc.fixedPointFrom
-            ? ccc.fixedPointFrom(ckbDisplay)
-            : shannons,
-        },
-      ],
-    });
-
-    if (typeof tx.completeInputsByCapacity === "function") {
-      await tx.completeInputsByCapacity(signer);
-    } else if (typeof signer.completeInputs === "function") {
-      await signer.completeInputs(tx);
-    }
-
-    if (typeof tx.completeFeeBy === "function") {
-      await tx.completeFeeBy(signer);
-    } else if (typeof tx.completeFee === "function") {
-      await tx.completeFee(signer);
-    }
-
-    setStatus(root, "Signing JoyID transfer…", "info");
-    const txHash =
-      typeof signer.sendTransaction === "function"
-        ? await signer.sendTransaction(tx)
-        : await ccc.sendTransaction(signer, tx);
-
-    log.info("JoyID funding submitted", { txHash });
-    setStatus(
-      root,
-      `Funded ${ckbDisplay} CKB → ${cachedAddress.slice(0, 14)}… · tx ${String(txHash).slice(0, 18)}…`,
-      "ok",
-    );
+    const signer = await connectJoyIdSigner(api.ccc, api.CkbSigner);
+    paintWalletChip(root, { connected: true, label: connectedWalletLabel });
+    setStatus(root, "Preparing payment…", "info");
+    await sendCapacity(root, signer, api.ccc, ckbAmount);
   } catch (error) {
     log.error("JoyID funding failed", error);
-    setStatus(root, safeUserMessage(error, "JoyID funding failed"), "err");
+    const msg = safeUserMessage(error, "JoyID funding failed");
+    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const popupBlocked =
+      /popup|webview|standard browsers|blocked|cancelled|Not connected/i.test(detail || msg);
+    setStatus(root, msg, "err");
+    if (popupBlocked) {
+      await openJoyIdPortal(root);
+    }
+  }
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {{ ccc: any }} api
+ */
+async function fundFromConnectedWallet(root, api) {
+  /** @type {bigint} */
+  let ckbAmount;
+  try {
+    ckbAmount = readAmountCkb(root);
+  } catch (error) {
+    setStatus(root, safeUserMessage(error, "Enter a whole positive CKB amount"), "err");
+    return;
+  }
+  setStatus(root, "Choose a wallet…", "info");
+  try {
+    const signer = await openCccWalletPicker();
+    paintWalletChip(root, { connected: true, label: connectedWalletLabel });
+    setStatus(root, "Preparing payment…", "info");
+    await sendCapacity(root, signer, api.ccc, ckbAmount);
+  } catch (error) {
+    log.error("CCC wallet funding failed", error);
+    setStatus(root, safeUserMessage(error, "Wallet funding failed"), "err");
   }
 }
 
@@ -220,102 +392,130 @@ async function fundFromJoyId(root, ccc) {
  * @param {HTMLElement} root
  */
 export async function mountFundingPanel(root) {
-  const refreshBtn = root.querySelector("[data-action='funding-refresh']");
-  const copyBtn = root.querySelector("[data-action='funding-copy']");
-  const faucetBtn = root.querySelector("[data-action='funding-faucet']");
-  const joyBtn = root.querySelector("[data-action='funding-joyid']");
+  const found = root.querySelector("[data-funding-root]");
+  const scope = found instanceof HTMLElement ? found : root;
 
-  refreshBtn?.addEventListener("click", () => {
-    void refreshFnnAddress(root);
+  scope.querySelector("[data-action='funding-refresh']")?.addEventListener("click", () => {
+    void refreshFnnAddress(scope);
   });
-  copyBtn?.addEventListener("click", () => {
-    void copyAddress(root);
+  scope.querySelector("[data-action='funding-copy']")?.addEventListener("click", () => {
+    void copyAddress(scope);
   });
-  faucetBtn?.addEventListener("click", () => {
-    void openFaucet(root);
+  scope.querySelector("[data-action='funding-faucet']")?.addEventListener("click", () => {
+    void openFaucet(scope);
+  });
+  scope.querySelector("[data-action='funding-amount-dec']")?.addEventListener("click", () => {
+    try {
+      writeAmountCkb(scope, readAmountCkb(scope) - 10n);
+    } catch {
+      writeAmountCkb(scope, 1n);
+    }
+  });
+  scope.querySelector("[data-action='funding-amount-inc']")?.addEventListener("click", () => {
+    try {
+      writeAmountCkb(scope, readAmountCkb(scope) + 10n);
+    } catch {
+      writeAmountCkb(scope, BigInt(DEFAULT_FUND_CKB));
+    }
+  });
+  scope.querySelector("[data-action='funding-joyid-portal']")?.addEventListener("click", () => {
+    void openJoyIdPortal(scope);
   });
 
-  void refreshFnnAddress(root);
+  paintWalletChip(scope, { connected: false });
+  void refreshFnnAddress(scope);
 
   let cccApi = null;
   try {
     cccApi = await loadCcc();
-    const host = root.querySelector("[data-ccc-host]");
-    if (host && cccApi.connectorReady) {
-      // Ensure the web component is present after dynamic import registered it.
-      if (!host.querySelector("ccc-connector")) {
-        host.innerHTML = `<ccc-connector></ccc-connector>`;
-      }
-    }
   } catch (error) {
     log.warn("CCC SDK unavailable", error);
     setStatus(
-      root,
-      "CCC wallet SDK failed to load — faucet route still works",
+      scope,
+      "Wallet tools didn't load — free faucet still works",
       "info",
     );
   }
 
-  joyBtn?.addEventListener("click", () => {
+  scope.querySelector("[data-action='funding-joyid']")?.addEventListener("click", () => {
     if (!cccApi?.ccc) {
-      setStatus(root, "CCC SDK not loaded", "err");
+      setStatus(scope, "Wallet tools not ready", "err");
       return;
     }
-    void fundFromJoyId(root, cccApi.ccc);
+    void fundFromJoyId(scope, cccApi);
+  });
+
+  scope.querySelector("[data-action='funding-ccc']")?.addEventListener("click", () => {
+    if (!cccApi?.ccc || !cccApi.connectorReady) {
+      setStatus(scope, "Wallet tools not ready", "err");
+      return;
+    }
+    void fundFromConnectedWallet(scope, cccApi);
   });
 }
 
 export function fundingPanelMarkup() {
   return `
-    <div class="funding-onboard" data-funding-root>
-      <div class="funding-hero workspace-card">
-        <div class="workspace-card-head">
-          <h2>Fund your local FNN</h2>
-          <p class="panel-hint">Testnet CKB for channel opens — faucet or JoyID passkey</p>
+    <div class="funding-onboard funding-superapp" data-funding-root>
+      <section class="funding-address-bar" aria-label="Receive address">
+        <div class="funding-address-bar-copy">
+          <p class="funding-kicker">This agent</p>
+          <h2 class="funding-address-title">Add funds</h2>
+          <p class="panel-hint">Test coins for payment links</p>
         </div>
-        <label class="funding-address-label" for="funding-address-display">Sidecar funding address</label>
+        <label class="funding-address-label" for="funding-address-display">Your receive address</label>
         <div class="funding-address-row">
           <code id="funding-address-display" class="funding-address" data-funding-address>Fetching…</code>
-          <button type="button" class="panel-btn" data-action="funding-copy">Copy Address</button>
-          <button type="button" class="panel-btn" data-action="funding-refresh">Refresh</button>
+          <div class="funding-address-actions">
+            <button type="button" class="panel-btn" data-action="funding-copy">Copy</button>
+            <button type="button" class="panel-btn" data-action="funding-refresh">Refresh</button>
+          </div>
         </div>
-        <p class="panel-hint" data-funding-meta>testnet</p>
+        <p class="panel-hint" data-funding-meta>test coins</p>
         <p class="funding-status" data-funding-status data-tone="info">Loading…</p>
-      </div>
+      </section>
 
-      <div class="funding-options">
-        <section class="workspace-card funding-option">
-          <div class="workspace-card-head">
-            <h3>Option 1 · Nervos faucet</h3>
-            <p class="panel-hint">Lowest friction — claim free testnet CKB in your browser</p>
-          </div>
-          <ol class="funding-steps">
-            <li>Copy the sidecar <code>ckt1</code> address above</li>
-            <li>Open the official Nervos testnet faucet</li>
-            <li>Paste the address and claim</li>
-          </ol>
-          <button type="button" class="panel-btn panel-btn-primary" data-action="funding-faucet">
-            Claim Testnet CKB
-          </button>
-        </section>
+      <section class="funding-joy-sheet" aria-labelledby="funding-joy-title">
+        <div class="funding-joy-glow" aria-hidden="true"></div>
+        <header class="funding-joy-head">
+          <p class="funding-kicker">Option 2 · Stay in-app</p>
+          <h3 id="funding-joy-title">JoyID passkey</h3>
+          <p class="panel-hint">Confirm once on your device to send coins here.</p>
+        </header>
 
-        <section class="workspace-card funding-option">
-          <div class="workspace-card-head">
-            <h3>Option 2 · JoyID passkey</h3>
-            <p class="panel-hint">Stay in-app — CCC connector + on-chain transfer to the sidecar</p>
+        <div class="funding-wallet-chip" data-funding-wallet data-connected="false">Passkey not connected</div>
+
+        <div class="funding-amount-pad">
+          <span class="funding-amount-label">Amount</span>
+          <div class="funding-amount-controls">
+            <button type="button" class="funding-amount-step" data-action="funding-amount-dec" aria-label="Decrease amount">−</button>
+            <div class="funding-amount-field">
+              <input id="funding-amount-ckb" data-funding-amount inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${DEFAULT_FUND_CKB}" aria-label="Amount in CKB">
+              <span class="funding-amount-unit">CKB</span>
+            </div>
+            <button type="button" class="funding-amount-step" data-action="funding-amount-inc" aria-label="Increase amount">+</button>
           </div>
-          <div class="funding-ccc-host" data-ccc-host>
-            <ccc-connector></ccc-connector>
-          </div>
-          <div class="workspace-field" style="margin-top:0.75rem">
-            <label for="funding-amount-ckb">Amount (CKB)</label>
-            <input id="funding-amount-ckb" data-funding-amount type="number" min="1" step="1" value="${DEFAULT_FUND_CKB}">
-          </div>
-          <button type="button" class="panel-btn panel-btn-primary" data-action="funding-joyid" style="margin-top:0.75rem">
-            Fund from JoyID
-          </button>
-        </section>
-      </div>
+        </div>
+
+        <button type="button" class="funding-joy-cta" data-action="funding-joyid">
+          Continue with JoyID
+        </button>
+        <div class="funding-joy-links">
+          <button type="button" class="funding-text-btn" data-action="funding-ccc">Other wallets</button>
+          <button type="button" class="funding-text-btn" data-action="funding-joyid-portal">Open JoyID website</button>
+        </div>
+      </section>
+
+      <section class="funding-faucet-rail" aria-labelledby="funding-faucet-title">
+        <div class="funding-faucet-copy">
+          <p class="funding-kicker">Option 1 · Browser</p>
+          <h3 id="funding-faucet-title">Free test coins</h3>
+          <p class="panel-hint">Copy the address above, claim free coins, done.</p>
+        </div>
+        <button type="button" class="panel-btn panel-btn-primary funding-faucet-btn" data-action="funding-faucet">
+          Claim free coins
+        </button>
+      </section>
     </div>
   `;
 }

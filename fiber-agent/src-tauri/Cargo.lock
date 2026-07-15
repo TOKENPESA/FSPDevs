@@ -896,6 +896,7 @@ version = "1.0.0"
 dependencies = [
  "bech32",
  "fiber_agent_sidecar",
+ "getrandom 0.2.17",
  "hex",
  "log",
  "mesh-core",

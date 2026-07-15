@@ -6,6 +6,7 @@ import { getFnnBootStatus, getSidecarStats, hasTauri } from "./sidecar-api.js";
 import { mountFatalFnnModal } from "./fnn-fatal.js";
 import { SidecarUiHost } from "./ui-host.js";
 import fundingModule from "./modules/funding/index.js";
+import channelsModule from "./modules/channels/index.js";
 import appStoreModule from "./modules/app-store/index.js";
 
 const log = createLogger("sidecar-ui");
@@ -18,6 +19,7 @@ const host = new SidecarUiHost(
 async function mountUiModulesFromBackend() {
   // Always-on onboarding + store (not gated by backend profile)
   host.ensureRegistered(fundingModule);
+  host.ensureRegistered(channelsModule);
   host.ensureRegistered(appStoreModule);
 
   if (!hasTauri()) {

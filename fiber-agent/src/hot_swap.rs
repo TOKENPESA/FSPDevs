@@ -43,7 +43,7 @@ pub async fn execute_hot_swap(
         }
     }
 
-    match backend.open_channel(&alt_pubkey, funding).await {
+    match backend.open_channel(&alt_pubkey, funding, None).await {
         Ok(()) => println!(
             "🛠️ [HOT-SWAP] Opened/reactivated FNN channel toward FA-{} (pubkey tail: …{})",
             cmd.alternative_peer_id,

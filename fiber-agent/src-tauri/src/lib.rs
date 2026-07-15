@@ -19,9 +19,10 @@ use tauri::webview::{NewWindowResponse, WebviewWindowBuilder};
 use tauri::{Manager, WebviewUrl};
 use tokio::sync::Mutex as TokioMutex;
 use commands::{
-    calculate_invoice_preview, dispatch_to_module, execute_cash_in_transaction,
-    execute_dico_contribution, fetch_installed_modules, fetch_module_catalog,
-    generate_oob_fallback_uri, get_fnn_boot_status, get_sidecar_stats, install_sidecar_module,
+    calculate_invoice_preview, close_mesh_channel, dispatch_to_module,
+    execute_cash_in_transaction, execute_dico_contribution, fetch_installed_modules,
+    fetch_module_catalog, generate_oob_fallback_uri, get_fnn_boot_status, get_sidecar_stats,
+    install_sidecar_module, list_mesh_channels, list_mfa_discoverable_agents, open_mesh_channel,
     process_oob_fallback, resolve_dicoba_member_id_for_agent, route_sidecar_command,
     toggle_hardware_profile, toggle_sidecar_module, uninstall_sidecar_module,
     trigger_manual_fiat_rebalance, FnnBootStatus, HardwareProfileState, OptionalSidecarHost,
@@ -65,20 +66,21 @@ pub fn run() {
                 env::set_var("MFA_AUTO_REGISTER", "true");
             }
 
-            // Start bundled FNN (externalBin logical name `binaries/fnn`) before probing RPC.
+            // Start bundled/native FNN before probing RPC. Failures must not crash setup —
+            // host init will surface a fatal boot status in the UI.
             #[cfg(desktop)]
             {
                 let handle = app.handle().clone();
-                let child = tauri::async_runtime::block_on(async move {
+                let bundled = tauri::async_runtime::block_on(async move {
                     match fnn_sidecar::spawn_bundled_fnn_if_needed(&handle).await {
-                        Ok(child) => child,
+                        Ok(proc) => proc,
                         Err(err) => {
-                            log::warn!("[fnn] bundled sidecar unavailable: {err}");
-                            None
+                            eprintln!("[fnn] bundled/native FNN unavailable: {err}");
+                            BundledFnnProcess::new(None)
                         }
                     }
                 });
-                app.manage(tokio::sync::Mutex::new(BundledFnnProcess { child }));
+                app.manage(tokio::sync::Mutex::new(bundled));
             }
 
             let mut sidecar_config = SidecarConfig::from_env();
@@ -196,6 +198,10 @@ pub fn run() {
             toggle_hardware_profile,
             execute_dico_contribution,
             get_sidecar_stats,
+            list_mesh_channels,
+            list_mfa_discoverable_agents,
+            open_mesh_channel,
+            close_mesh_channel,
             get_fnn_boot_status,
             get_fnn_address,
             generate_oob_fallback_uri,
@@ -215,7 +221,8 @@ pub fn run() {
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
                 #[cfg(desktop)]
-                if let Some(state) = app_handle.try_state::<tokio::sync::Mutex<BundledFnnProcess>>() {
+                if let Some(state) = app_handle.try_state::<tokio::sync::Mutex<BundledFnnProcess>>()
+                {
                     if let Ok(mut guard) = state.try_lock() {
                         guard.kill();
                     }

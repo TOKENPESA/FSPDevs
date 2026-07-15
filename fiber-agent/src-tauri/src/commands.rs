@@ -7,7 +7,7 @@ use fiber_agent::clearing_client::{
 use fiber_agent::mesh_ports::{fnn_p2p_multiaddr, resolve_fnn_rpc_url};
 use fiber_agent::mesh::{
     agent_fnn_pubkey, mesh_neighbor_ids, resolve_dicoba_member_id, resolve_local_dicoba_member_id,
-    RING_SIZE,
+    resolve_open_channel_shannons, RING_SIZE,
 };
 use fiber_agent::module_catalog::{catalog_entries, is_allowed_method, is_allowed_oob_peer_method};
 use fiber_agent::module_host::SidecarHost;
@@ -756,6 +756,241 @@ pub async fn toggle_sidecar_module(
         is_active: record.is_active,
         config: serde_json::from_str(&record.config_json).unwrap_or_else(|_| json!({})),
     })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshChannelSnapshot {
+    pub peer_id: u16,
+    pub peer_pubkey: Option<String>,
+    pub channel_id: Option<String>,
+    pub is_active: bool,
+    pub state_name: String,
+    pub local_balance_shannons: u64,
+    pub remote_balance_shannons: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverableAgentSnapshot {
+    pub agent_id: u16,
+    pub online: bool,
+    pub fnn_pubkey_hex: Option<String>,
+    pub peer_connect_address: Option<String>,
+    pub is_self: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverableAgentsResponse {
+    pub mfa_host: String,
+    pub agents: Vec<DiscoverableAgentSnapshot>,
+    pub default_funding_shannons: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenChannelRequest {
+    pub peer_pubkey: String,
+    pub amount_shannons: Option<u64>,
+    pub peer_address: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseChannelRequest {
+    pub peer_pubkey: Option<String>,
+    pub channel_id: Option<String>,
+    pub force: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn list_mesh_channels(
+    host: State<'_, OptionalSidecarHost>,
+) -> Result<Vec<MeshChannelSnapshot>, String> {
+    let host = require_host_arc(&host)?;
+    let host = host.lock().await;
+    let channels = host.fnn_client.list_channels().await?;
+    Ok(channels
+        .into_iter()
+        .map(|c| MeshChannelSnapshot {
+            peer_id: c.peer_id,
+            peer_pubkey: c.peer_pubkey,
+            channel_id: c.channel_id,
+            is_active: c.is_active,
+            state_name: if c.state_name.is_empty() {
+                if c.is_active {
+                    "ChannelReady".to_string()
+                } else {
+                    "Inactive".to_string()
+                }
+            } else {
+                c.state_name
+            },
+            local_balance_shannons: c.local_balance_shannons,
+            remote_balance_shannons: c.remote_balance_shannons,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn list_mfa_discoverable_agents(
+    host: State<'_, OptionalSidecarHost>,
+) -> Result<DiscoverableAgentsResponse, String> {
+    let host = require_host_arc(&host)?;
+    let self_id = host.lock().await.agent_id;
+    let mfa_host = resolve_mfa_host();
+    let health = probe_mfa_health(Some(&mfa_host)).await?;
+    let mut agents = Vec::new();
+    if let Some(list) = health.get("discoverable_agents").and_then(|v| v.as_array()) {
+        for entry in list {
+            let agent_id = entry
+                .get("agent_id")
+                .and_then(|v| v.as_u64())
+                .or_else(|| entry.get("agent_id").and_then(|v| v.as_i64()).map(|n| n as u64))
+                .unwrap_or(0) as u16;
+            if agent_id == 0 {
+                continue;
+            }
+            agents.push(DiscoverableAgentSnapshot {
+                agent_id,
+                online: entry
+                    .get("online")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                fnn_pubkey_hex: entry
+                    .get("fnn_pubkey_hex")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                peer_connect_address: entry
+                    .get("peer_connect_address")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                is_self: agent_id == self_id,
+            });
+        }
+    } else if let Some(ids) = health
+        .get("connected_agent_ids")
+        .and_then(|v| v.as_array())
+    {
+        // Older MFA builds: agent IDs only (pubkey must come from telemetry after upgrade).
+        for id in ids {
+            let agent_id = id
+                .as_u64()
+                .or_else(|| id.as_i64().map(|n| n as u64))
+                .unwrap_or(0) as u16;
+            if agent_id == 0 {
+                continue;
+            }
+            agents.push(DiscoverableAgentSnapshot {
+                agent_id,
+                online: true,
+                fnn_pubkey_hex: None,
+                peer_connect_address: None,
+                is_self: agent_id == self_id,
+            });
+        }
+    }
+    agents.sort_by_key(|a| a.agent_id);
+    Ok(DiscoverableAgentsResponse {
+        mfa_host,
+        agents,
+        default_funding_shannons: resolve_open_channel_shannons(),
+    })
+}
+
+#[tauri::command]
+pub async fn open_mesh_channel(
+    host: State<'_, OptionalSidecarHost>,
+    request: OpenChannelRequest,
+) -> Result<String, String> {
+    let host_arc = require_host_arc(&host)?;
+    let peer_pubkey = request.peer_pubkey.trim().to_string();
+    if peer_pubkey.is_empty() {
+        return Err("peer_pubkey is required".to_string());
+    }
+    let amount = request
+        .amount_shannons
+        .filter(|n| *n > 0)
+        .unwrap_or_else(resolve_open_channel_shannons);
+    let address = request
+        .peer_address
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string);
+    if address.is_none() {
+        return Err(
+            "Peer has no P2P address from MFA yet. Restart the remote FA so it announces \
+             FIBER_ANNOUNCE_ADDR (LAN IP + tcp/8228), Refresh Channels, then retry."
+                .to_string(),
+        );
+    }
+    if address
+        .as_deref()
+        .is_some_and(|a| a.contains("127.0.0.1") || a.contains("/ip4/0.0.0.0"))
+    {
+        return Err(
+            "Peer's announced address is localhost-only, so another machine cannot connect. \
+             On the remote FA set FIBER_ANNOUNCE_ADDR=/ip4/<its-LAN-IP>/tcp/8228, open firewall \
+             TCP 8228, restart that FA, Refresh Channels, then retry."
+                .to_string(),
+        );
+    }
+    let (fnn_client, agent_id) = {
+        let host = host_arc.lock().await;
+        (host.fnn_client.clone(), host.agent_id)
+    };
+    let fnn_rpc_url = std::env::var("FNN_RPC_URL").unwrap_or_else(|_| resolve_fnn_rpc_url(agent_id));
+    let (funding_address, l1_shannons) =
+        crate::fnn_address::require_l1_for_channel_open(&fnn_rpc_url, amount).await?;
+    fnn_client
+        .open_channel(&peer_pubkey, amount, address.as_deref())
+        .await
+        .map_err(|err| format!("open_channel failed: {err}"))?;
+    Ok(format!(
+        "CKB testnet channel ChannelReady with {} (funded {} shannons; L1 lock {} had {} shannons)",
+        &peer_pubkey[..peer_pubkey.len().min(16)],
+        amount,
+        &funding_address[..funding_address.len().min(18)],
+        l1_shannons,
+    ))
+}
+
+#[tauri::command]
+pub async fn close_mesh_channel(
+    host: State<'_, OptionalSidecarHost>,
+    request: CloseChannelRequest,
+) -> Result<String, String> {
+    let host = require_host_arc(&host)?;
+    let host = host.lock().await;
+    let force = request.force.unwrap_or(false);
+    if let Some(channel_id) = request
+        .channel_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        host.fnn_client
+            .close_channel_by_id(channel_id, force)
+            .await
+            .map_err(|err| format!("close_channel failed: {err}"))?;
+        return Ok(format!("Closing channel {channel_id}"));
+    }
+    let peer_pubkey = request
+        .peer_pubkey
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "channel_id or peer_pubkey is required".to_string())?;
+    host.fnn_client
+        .close_channel(peer_pubkey, force)
+        .await
+        .map_err(|err| format!("close_channel failed: {err}"))?;
+    Ok(format!(
+        "Closing channel with peer {}",
+        &peer_pubkey[..peer_pubkey.len().min(16)]
+    ))
 }
 
 #[cfg(test)]

@@ -462,6 +462,7 @@ mod tests {
             agent_ws_token: "test".to_string(),
             api_token: "test-api-token-123456".to_string(),
             agent_fnn_pubkeys: RwLock::new(HashMap::new()),
+            agent_peer_addresses: RwLock::new(HashMap::new()),
             mesh_pubkey_registry: mesh_core::MeshPubkeyRegistry::from_map(HashMap::new()),
             payment_waiters: Arc::new(RwLock::new(HashMap::new())),
             payment_engine: crate::payment::PaymentEngineState::new(),

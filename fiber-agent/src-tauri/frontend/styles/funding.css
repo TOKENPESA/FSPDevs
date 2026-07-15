@@ -65,6 +65,13 @@
   color: var(--text);
 }
 
+.funding-l1-balance {
+  margin: 0.65rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .funding-status {
   margin: 0.7rem 0 0;
   font-size: var(--text-sm);

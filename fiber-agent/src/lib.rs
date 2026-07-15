@@ -95,6 +95,9 @@ pub struct MeshChannelState {
     pub local_balance_shannons: u64,
     #[serde(default)]
     pub remote_balance_shannons: u64,
+    /// Fiber channel state label (e.g. `ChannelReady`, `NegotiatingFunding`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state_name: String,
     /// Multi-asset HTLC balances on the local side (RGB++/UDT when present).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_capacities: Vec<AssetCapacity>,
@@ -190,6 +193,8 @@ pub const FNN_FATAL_BOOT_MESSAGE: &str =
 pub enum FnnError {
     /// Non-testnet mode without an explicit `FNN_MODE=simulate|sim` demo choice.
     ExplicitDemoModeRequired,
+    /// Live/testnet mode but local Fiber RPC is unreachable (do not silently simulate).
+    LiveUnreachable(String),
 }
 
 impl std::fmt::Display for FnnError {
@@ -198,6 +203,10 @@ impl std::fmt::Display for FnnError {
             Self::ExplicitDemoModeRequired => write!(
                 f,
                 "Explicit demo mode required: set FNN_MODE=simulate, or FNN_MODE=testnet with live FNN on :8227"
+            ),
+            Self::LiveUnreachable(detail) => write!(
+                f,
+                "{FNN_FATAL_BOOT_MESSAGE} CRITICAL: Live FNN Node failed to bind to port 8227. {detail}"
             ),
         }
     }
@@ -244,10 +253,13 @@ pub async fn resolve_fnn_backend(
                 return Ok(Box::new(client));
             }
             Err(e) => {
-                // DO NOT degrade to SimulatedFnnClient. Force a hard panic.
-                panic!(
+                // DO NOT degrade to SimulatedFnnClient — hard fail (Err so desktop can show UI).
+                eprintln!(
                     "CRITICAL: Live FNN Node failed to bind to port 8227. Network connection severed. Error: {e}"
                 );
+                return Err(FnnError::LiveUnreachable(format!(
+                    "Network connection severed. Error: {e}"
+                )));
             }
         }
     }
@@ -267,28 +279,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_fnn_backend_panics_when_live_unreachable() {
+    async fn resolve_fnn_backend_hard_fails_when_live_unreachable() {
         let _guard = fnn_mode_lock().lock().expect("fnn mode lock");
         let prev = env::var("FNN_MODE").ok();
         env::set_var("FNN_MODE", "testnet");
-        let join = tokio::spawn(async { resolve_fnn_backend(44, "http://127.0.0.1:1").await });
-        let join_err = match join.await {
-            Err(err) if err.is_panic() => err,
-            Ok(Ok(_)) => panic!("must not silently connect or simulate"),
-            Ok(Err(err)) => panic!("must panic, not return Err: {err}"),
-            Err(err) => panic!("unexpected join failure: {err}"),
+        let err = match resolve_fnn_backend(44, "http://127.0.0.1:1").await {
+            Ok(_) => panic!("must not silently connect or simulate"),
+            Err(err) => err,
         };
-        let payload = join_err.into_panic();
-        let message = if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else if let Some(s) = payload.downcast_ref::<&str>() {
-            (*s).to_string()
-        } else {
-            format!("{payload:?}")
-        };
+        match &err {
+            FnnError::LiveUnreachable(detail) => {
+                assert!(
+                    detail.contains("Network connection severed") || detail.contains("unreachable"),
+                    "unexpected detail: {detail}"
+                );
+            }
+            other => panic!("expected LiveUnreachable, got {other}"),
+        }
         assert!(
-            message.contains("CRITICAL: Live FNN Node failed to bind to port 8227"),
-            "unexpected panic payload: {message}"
+            err.to_string().contains("FATAL: Live Testnet Node Failed to Boot"),
+            "unexpected error: {err}"
         );
         match prev {
             Some(value) => env::set_var("FNN_MODE", value),
@@ -352,6 +362,7 @@ mod tests {
                 channel_id: None,
                 local_balance_shannons: 100,
                 remote_balance_shannons: 200,
+                state_name: "ChannelReady".to_string(),
                 local_capacities: vec![],
                 remote_capacities: vec![],
             },
@@ -364,6 +375,7 @@ mod tests {
                 channel_id: None,
                 local_balance_shannons: 1_000,
                 remote_balance_shannons: 2_000,
+                state_name: "Closed".to_string(),
                 local_capacities: vec![],
                 remote_capacities: vec![],
             },

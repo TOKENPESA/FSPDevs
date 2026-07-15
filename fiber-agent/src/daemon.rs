@@ -17,6 +17,7 @@ use crate::payment::execute_mesh_payment;
 use crate::power::{AdaptivePowerController, PowerProfile};
 use crate::utility_runtime::UtilityRuntime;
 use crate::fnn_client::{ArcFnnBackend, FiberNodeRpc, LiveFnnClient};
+use crate::mesh_ports::resolve_fnn_announce_address;
 use crate::{
     aggregate_active_balances, attach_telemetry_signature, flush_queued_telemetry,
     mesh_unix_timestamp_secs, refresh_pubkey_cache, resolve_agent_secret_key, resolve_fnn_backend,
@@ -485,6 +486,11 @@ pub fn spawn_mfa_control_ws(
                     let mut keepalive = tokio::time::interval(Duration::from_secs(25));
                     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+                    // Publish live Fiber identity so MFA peer discovery can list this FA.
+                    if let Err(err) = send_peer_announce(&mut ws_tx, agent_id, &fnn_backend).await {
+                        log_agent_err(quiet, agent_id, &format!("peer_announce failed: {err}"));
+                    }
+
                     loop {
                         tokio::select! {
                             msg = ws_rx.next() => {
@@ -557,6 +563,8 @@ pub fn spawn_mfa_control_ws(
                                 if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() {
                                     break;
                                 }
+                                // Refresh discovery announcement (pubkey/address may change after FNN restart).
+                                let _ = send_peer_announce(&mut ws_tx, agent_id, &fnn_backend).await;
                             }
                         }
                     }
@@ -568,6 +576,31 @@ pub fn spawn_mfa_control_ws(
             sleep(Duration::from_secs(5)).await;
         }
     });
+}
+
+async fn send_peer_announce<S>(
+    ws_tx: &mut S,
+    agent_id: u16,
+    fnn_backend: &Arc<Mutex<Box<dyn FiberNodeRpc + Send + Sync>>>,
+) -> Result<(), String>
+where
+    S: SinkExt<Message> + Unpin,
+    S::Error: std::fmt::Display,
+{
+    let pubkey = {
+        let backend = fnn_backend.lock().await;
+        backend.node_pubkey().await?
+    };
+    let announce = serde_json::json!({
+        "type": "peer_announce",
+        "fnn_pubkey_hex": pubkey,
+        "peer_connect_address": resolve_fnn_announce_address(agent_id),
+    });
+    ws_tx
+        .send(Message::Text(announce.to_string().into()))
+        .await
+        .map_err(|err| format!("WS send peer_announce: {err}"))?;
+    Ok(())
 }
 
 async fn run_telemetry_poll_loop(mut ctx: TelemetryPollContext) {
@@ -691,6 +724,7 @@ async fn run_telemetry_poll_loop(mut ctx: TelemetryPollContext) {
                 } else {
                     let (outbound_shannons, _inbound_shannons) =
                         aggregate_active_balances(&channels);
+                    let announce = crate::mesh_ports::resolve_fnn_announce_address(agent_id);
                     let heartbeat = attach_telemetry_signature(
                         {
                             let mut pulse = next_pulse(
@@ -698,7 +732,7 @@ async fn run_telemetry_poll_loop(mut ctx: TelemetryPollContext) {
                                 agent_id,
                                 0,
                                 outbound_shannons,
-                                None,
+                                Some(announce),
                             );
                             pulse.active_mesh_neighbors = active_neighbors;
                             pulse

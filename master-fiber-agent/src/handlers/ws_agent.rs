@@ -27,8 +27,44 @@ async fn try_handle_incoming_ws_text(
     payment_engine: &PaymentEngineState,
     peers: &PeerRegistry,
     edge_hardware_profiles: &Arc<RwLock<HashMap<u16, String>>>,
+    agent_fnn_pubkeys: &RwLock<HashMap<u16, String>>,
+    agent_peer_addresses: &RwLock<HashMap<u16, String>>,
 ) {
     if let Ok(json_msg) = serde_json::from_str::<serde_json::Value>(incoming_text) {
+        // Authenticated control-plane discovery (WS HMAC already verified agent_id).
+        if json_msg.get("type").and_then(|v| v.as_str()) == Some("peer_announce") {
+            if let Some(pk) = json_msg
+                .get("fnn_pubkey_hex")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if mesh_core::is_live_fiber_pubkey(pk) {
+                    agent_fnn_pubkeys
+                        .write()
+                        .await
+                        .insert(source_agent_id, pk.to_string());
+                } else {
+                    log::warn!(
+                        "⚠️ [DISCOVERY] FA-{source_agent_id} peer_announce ignored — invalid Fiber pubkey"
+                    );
+                }
+            }
+            if let Some(addr) = json_msg
+                .get("peer_connect_address")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                agent_peer_addresses
+                    .write()
+                    .await
+                    .insert(source_agent_id, addr.to_string());
+            }
+            log::info!("🔎 [DISCOVERY] FA-{source_agent_id} announced Fiber peer identity");
+            return;
+        }
+
         if json_msg.get("type").and_then(|v| v.as_str()) == Some("sys_broadcast") {
             if json_msg.get("event").and_then(|v| v.as_str())
                 == Some("FSP_HARDWARE_PROFILE_CHANGED")
@@ -165,30 +201,15 @@ pub async fn ws_handler(
         return status.into_response();
     }
 
+    ws.on_upgrade(move |socket| handle_socket(socket, agent_id, state))
+}
+
+async fn handle_socket(socket: WebSocket, agent_id: u16, state: Arc<AppState>) {
     let peers = state.peers.clone();
     let payment_waiters = state.payment_waiters.clone();
     let payment_engine = state.payment_engine.clone();
     let edge_hardware_profiles = state.edge_hardware_profiles.clone();
-    ws.on_upgrade(move |socket| {
-        handle_socket(
-            socket,
-            agent_id,
-            peers,
-            payment_waiters,
-            payment_engine,
-            edge_hardware_profiles,
-        )
-    })
-}
 
-async fn handle_socket(
-    socket: WebSocket,
-    agent_id: u16,
-    peers: PeerRegistry,
-    payment_waiters: Arc<RwLock<HashMap<String, oneshot::Sender<PaymentExecResult>>>>,
-    payment_engine: PaymentEngineState,
-    edge_hardware_profiles: Arc<RwLock<HashMap<u16, String>>>,
-) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (tx, mut rx) = mpsc::channel::<AxumMessage>(PEER_TX_CAP);
 
@@ -217,6 +238,7 @@ async fn handle_socket(
     let mut recv_task = tokio::spawn({
         let peers_for_hop = peers.clone();
         let edge_profiles_for_sys = edge_hardware_profiles.clone();
+        let state_for_recv = state.clone();
         async move {
             while let Some(Ok(msg)) = ws_rx.next().await {
                 if let AxumMessage::Text(text) = &msg {
@@ -227,6 +249,8 @@ async fn handle_socket(
                         &payment_engine,
                         &peers_for_hop,
                         &edge_profiles_for_sys,
+                        &state_for_recv.agent_fnn_pubkeys,
+                        &state_for_recv.agent_peer_addresses,
                     )
                     .await;
                 }

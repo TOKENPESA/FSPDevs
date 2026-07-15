@@ -47,6 +47,8 @@ pub struct AppState {
     pub agent_ws_token: String,
     /// Latest Fiber node pubkeys reported by sidecar heartbeats.
     pub agent_fnn_pubkeys: RwLock<HashMap<u16, String>>,
+    /// Latest Fiber P2P connect addresses advertised in heartbeats (`peer_connect_address`).
+    pub agent_peer_addresses: RwLock<HashMap<u16, String>>,
     pub mesh_pubkey_registry: MeshPubkeyRegistry,
     pub payment_waiters: Arc<RwLock<HashMap<String, oneshot::Sender<PaymentExecResult>>>>,
     pub payment_engine: PaymentEngineState,

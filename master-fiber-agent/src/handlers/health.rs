@@ -18,6 +18,22 @@ pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_js
     let connected_agents = connected_agent_ids.len();
     drop(peers);
 
+    let pubkeys = state.agent_fnn_pubkeys.read().await;
+    let addresses = state.agent_peer_addresses.read().await;
+    let discoverable_agents: Vec<serde_json::Value> = connected_agent_ids
+        .iter()
+        .map(|agent_id| {
+            serde_json::json!({
+                "agent_id": agent_id,
+                "online": true,
+                "fnn_pubkey_hex": pubkeys.get(agent_id).cloned(),
+                "peer_connect_address": addresses.get(agent_id).cloned(),
+            })
+        })
+        .collect();
+    drop(pubkeys);
+    drop(addresses);
+
     let api_url = telco_clearing_api_url();
     let mock_active = telco_clearing_mock_when_unset();
     let regional_clearing_ready = !api_url.is_empty() || mock_active;
@@ -38,6 +54,7 @@ pub async fn health_handler(State(state): State<Arc<AppState>>) -> Json<serde_js
         "simulation_edge_nodes": edge_nodes,
         "connected_agents": connected_agents,
         "connected_agent_ids": connected_agent_ids,
+        "discoverable_agents": discoverable_agents,
         "simulation_grid_dim": simulation_grid_dim(edge_nodes),
         "telemetry": "/telemetry",
         "route": "/route",

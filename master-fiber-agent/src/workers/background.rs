@@ -325,6 +325,16 @@ pub async fn background_processor_worker(
                         .await
                         .insert(telemetry.agent_id, pk.clone());
                 }
+                if let Some(ref addr) = telemetry.peer_connect_address {
+                    let trimmed = addr.trim();
+                    if !trimmed.is_empty() {
+                        state
+                            .agent_peer_addresses
+                            .write()
+                            .await
+                            .insert(telemetry.agent_id, trimmed.to_string());
+                    }
+                }
 
                 let heartbeat_payload = match serde_json::to_value(&telemetry) {
                     Ok(value) => value,

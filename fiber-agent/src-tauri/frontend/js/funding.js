@@ -73,13 +73,34 @@ function paintWalletChip(root, state) {
 
 /**
  * @param {HTMLElement} root
- * @param {{ address: string, pubkey?: string, source?: string, network?: string, fundingLockScript?: Record<string, unknown> }} snapshot
+ * @param {{
+ *   address: string,
+ *   pubkey?: string,
+ *   source?: string,
+ *   network?: string,
+ *   fundingLockScript?: Record<string, unknown>,
+ *   l1BalanceCkb?: string,
+ *   l1BalanceShannons?: number | string,
+ *   l1BalanceSource?: string,
+ * }} snapshot
  */
 function paintAddress(root, snapshot) {
   cachedAddress = snapshot.address;
   cachedLockScript = snapshot.fundingLockScript ?? null;
   const addrEl = root.querySelector("[data-funding-address]");
   if (addrEl) addrEl.textContent = snapshot.address;
+  const l1El = root.querySelector("[data-funding-l1-balance]");
+  if (l1El) {
+    const ckb = snapshot.l1BalanceCkb ?? "0";
+    const src = String(snapshot.l1BalanceSource ?? "");
+    if (src.startsWith("unavailable")) {
+      l1El.textContent = "L1 funding lock: unavailable (check CKB RPC)";
+    } else if (src === "simulate") {
+      l1El.textContent = "L1 funding lock: n/a in demo mode";
+    } else {
+      l1El.textContent = `L1 funding lock: ${ckb} CKB`;
+    }
+  }
   const metaEl = root.querySelector("[data-funding-meta]");
   if (metaEl) {
     const network =
@@ -136,12 +157,19 @@ export async function refreshFnnAddress(root) {
       source: snapshot.source,
       network: snapshot.network,
       fundingLockScript: snapshot.fundingLockScript,
+      l1BalanceCkb: snapshot.l1BalanceCkb,
+      l1BalanceShannons: snapshot.l1BalanceShannons,
+      l1BalanceSource: snapshot.l1BalanceSource,
     });
+    const l1Ckb = Number(snapshot.l1BalanceCkb ?? 0);
+    const funded = Number.isFinite(l1Ckb) && l1Ckb > 0;
     setStatus(
       root,
       snapshot.source === "simulated"
         ? "Demo mode — this address can't receive real test coins yet"
-        : "Address ready — claim free coins or send with JoyID",
+        : funded
+          ? `L1 funding lock shows ${snapshot.l1BalanceCkb} CKB — ready to open channels`
+          : "Address ready — claim free coins (then Refresh). Dashboard channel balance stays 0 until a Fiber channel is open.",
       "ok",
     );
   } catch (error) {
@@ -357,9 +385,27 @@ async function fundFromJoyId(root, api) {
   } catch (error) {
     log.error("JoyID funding failed", error);
     const msg = safeUserMessage(error, "JoyID funding failed");
-    const detail = error instanceof Error ? error.message : String(error ?? "");
+    const detail = [
+      error instanceof Error ? error.message : String(error ?? ""),
+      error?.name,
+      error?.cause,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const credentialMissing =
+      /WalletNotSupportedError|Credential not found|credential/i.test(detail || msg);
     const popupBlocked =
       /popup|webview|standard browsers|blocked|cancelled|Not connected/i.test(detail || msg);
+
+    if (credentialMissing) {
+      setStatus(
+        root,
+        "No JoyID passkey for this app yet — click “+ Create New” in the JoyID window (installed app uses tauri.localhost; that is a different login than browser/dev). Or use Copy address + faucet.",
+        "err",
+      );
+      return;
+    }
+
     setStatus(root, msg, "err");
     if (popupBlocked) {
       await openJoyIdPortal(root);
@@ -476,6 +522,7 @@ export function fundingPanelMarkup() {
             <button type="button" class="panel-btn" data-action="funding-refresh">Refresh</button>
           </div>
         </div>
+        <p class="funding-l1-balance" data-funding-l1-balance>L1 funding lock: …</p>
         <p class="panel-hint" data-funding-meta>test coins</p>
         <p class="funding-status" data-funding-status data-tone="info">Loading…</p>
       </section>

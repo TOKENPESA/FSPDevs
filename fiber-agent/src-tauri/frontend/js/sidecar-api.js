@@ -178,6 +178,9 @@ export async function processOobFallback(uriString) {
  *   fnnRpcUrl: string,
  *   fundingLockScript: Record<string, unknown>,
  *   source: string,
+ *   l1BalanceShannons: number,
+ *   l1BalanceCkb: string,
+ *   l1BalanceSource: string,
  * }>}
  */
 export async function getFnnAddress() {
@@ -191,9 +194,91 @@ export async function getFnnAddress() {
    *   fnnRpcUrl: string,
    *   fundingLockScript: Record<string, unknown>,
    *   source: string,
+   *   l1BalanceShannons: number,
+   *   l1BalanceCkb: string,
+   *   l1BalanceSource: string,
    * }} */
   const snapshot = /** @type {any} */ (await invoke("get_fnn_address"));
   return snapshot;
+}
+
+/**
+ * @typedef {{
+ *   peerId: number,
+ *   peerPubkey?: string | null,
+ *   channelId?: string | null,
+ *   isActive: boolean,
+ *   localBalanceShannons: number,
+ *   remoteBalanceShannons: number,
+ * }} MeshChannel
+ */
+
+/**
+ * @typedef {{
+ *   agentId: number,
+ *   online: boolean,
+ *   fnnPubkeyHex?: string | null,
+ *   peerConnectAddress?: string | null,
+ *   isSelf: boolean,
+ * }} DiscoverableAgent
+ */
+
+/** @returns {Promise<MeshChannel[]>} */
+export async function listMeshChannels() {
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri runtime unavailable");
+  }
+  return /** @type {Promise<MeshChannel[]>} */ (invoke("list_mesh_channels"));
+}
+
+/**
+ * @returns {Promise<{
+ *   mfaHost: string,
+ *   agents: DiscoverableAgent[],
+ *   defaultFundingShannons: number,
+ * }>}
+ */
+export async function listMfaDiscoverableAgents() {
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri runtime unavailable");
+  }
+  /** @type {{
+   *   mfaHost: string,
+   *   agents: DiscoverableAgent[],
+   *   defaultFundingShannons: number,
+   * }} */
+  const snapshot = /** @type {any} */ (await invoke("list_mfa_discoverable_agents"));
+  return snapshot;
+}
+
+/**
+ * @param {{
+ *   peerPubkey: string,
+ *   amountShannons?: number | null,
+ *   peerAddress?: string | null,
+ * }} request
+ * @returns {Promise<string>}
+ */
+export async function openMeshChannel(request) {
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri runtime unavailable");
+  }
+  return /** @type {Promise<string>} */ (invoke("open_mesh_channel", { request }));
+}
+
+/**
+ * @param {{
+ *   peerPubkey?: string | null,
+ *   channelId?: string | null,
+ *   force?: boolean | null,
+ * }} request
+ * @returns {Promise<string>}
+ */
+export async function closeMeshChannel(request) {
+  if (typeof invoke !== "function") {
+    throw new Error("Tauri runtime unavailable");
+  }
+  return /** @type {Promise<string>} */ (invoke("close_mesh_channel", { request }));
 }
 
 /**

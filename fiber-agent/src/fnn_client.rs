@@ -117,6 +117,32 @@ struct FnnChannel {
 #[derive(Deserialize)]
 struct NodeInfoResult {
     pubkey: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    addresses: Vec<String>,
+}
+
+fn format_fnn_rpc_error(err: &Value) -> String {
+    let message = err
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown FNN error");
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("peer")
+        || lower.contains("not found")
+        || lower.contains("not connected")
+        || lower.contains("disconnected")
+    {
+        return format!(
+            "{message}. The peer Fiber node is not connected yet — both machines need a reachable P2P address (set FIBER_ANNOUNCE_ADDR=/ip4/<LAN-IP>/tcp/8228 and allow TCP 8228 in the firewall), then Refresh Channels and retry."
+        );
+    }
+    if lower.contains("fund") || lower.contains("capacity") || lower.contains("insufficient") {
+        return format!(
+            "{message}. Fund this FA's L1 funding lock on CKB testnet (Add funds), then retry with a smaller channel size if needed."
+        );
+    }
+    message.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,9 +162,19 @@ pub trait FiberNodeRpc: Send + Sync {
 
     async fn list_channels(&self) -> Result<Vec<MeshChannelState>, String>;
     async fn node_pubkey(&self) -> Result<String, String>;
-    async fn connect_peer(&self, peer_public_key: &str) -> Result<(), String>;
-    async fn open_channel(&self, peer_public_key: &str, amount: u64) -> Result<(), String>;
+    async fn connect_peer(
+        &self,
+        peer_public_key: &str,
+        peer_address: Option<&str>,
+    ) -> Result<(), String>;
+    async fn open_channel(
+        &self,
+        peer_public_key: &str,
+        amount: u64,
+        peer_address: Option<&str>,
+    ) -> Result<(), String>;
     async fn close_channel(&self, peer_public_key: &str, force: bool) -> Result<(), String>;
+    async fn close_channel_by_id(&self, channel_id: &str, force: bool) -> Result<(), String>;
     async fn send_keysend_payment(
         &self,
         target_pubkey: &str,
@@ -176,16 +212,31 @@ impl FiberNodeRpc for ArcFnnBackend {
         self.0.node_pubkey().await
     }
 
-    async fn connect_peer(&self, peer_public_key: &str) -> Result<(), String> {
-        self.0.connect_peer(peer_public_key).await
+    async fn connect_peer(
+        &self,
+        peer_public_key: &str,
+        peer_address: Option<&str>,
+    ) -> Result<(), String> {
+        self.0.connect_peer(peer_public_key, peer_address).await
     }
 
-    async fn open_channel(&self, peer_public_key: &str, amount: u64) -> Result<(), String> {
-        self.0.open_channel(peer_public_key, amount).await
+    async fn open_channel(
+        &self,
+        peer_public_key: &str,
+        amount: u64,
+        peer_address: Option<&str>,
+    ) -> Result<(), String> {
+        self.0
+            .open_channel(peer_public_key, amount, peer_address)
+            .await
     }
 
     async fn close_channel(&self, peer_public_key: &str, force: bool) -> Result<(), String> {
         self.0.close_channel(peer_public_key, force).await
+    }
+
+    async fn close_channel_by_id(&self, channel_id: &str, force: bool) -> Result<(), String> {
+        self.0.close_channel_by_id(channel_id, force).await
     }
 
     async fn send_keysend_payment(
@@ -318,12 +369,34 @@ impl LiveFnnClient {
             .map_err(|e| format!("Failed to parse FNN RPC response: {e}"))?;
 
         if let Some(err) = body.get("error") {
-            return Err(format!("FNN RPC error: {err}"));
+            return Err(format!("FNN RPC error: {}", format_fnn_rpc_error(err)));
         }
 
         body.get("result")
             .cloned()
             .ok_or_else(|| format!("FNN RPC missing result field: {body}"))
+    }
+
+    async fn peer_is_connected(&self, peer_public_key: &str) -> Result<bool, String> {
+        let result = match self.call_rpc("list_peers", serde_json::json!([{}])).await {
+            Ok(value) => value,
+            Err(_) => self.call_rpc("list_peers", serde_json::json!([])).await?,
+        };
+        let peers = result
+            .get("peers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let want = peer_public_key
+            .trim()
+            .trim_start_matches("0x")
+            .to_ascii_lowercase();
+        Ok(peers.iter().any(|peer| {
+            peer.get("pubkey")
+                .and_then(|v| v.as_str())
+                .map(|pk| pk.trim().trim_start_matches("0x").to_ascii_lowercase() == want)
+                .unwrap_or(false)
+        }))
     }
 
     /// Posts a raw JSON-RPC envelope (used by the mobile-money float bridge).
@@ -418,20 +491,69 @@ impl LiveFnnClient {
         Ok(false)
     }
 
+    pub(crate) fn channel_state_name(state: &Value) -> String {
+        if let Some(s) = state.as_str() {
+            return s.to_string();
+        }
+        if let Some(s) = state.get("state_name").and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+        if let Some(obj) = state.as_object() {
+            if let Some((key, _)) = obj.iter().next() {
+                return key.clone();
+            }
+        }
+        "Unknown".to_string()
+    }
+
     pub(crate) fn channel_is_active(state: &Value) -> bool {
-        if state
-            .as_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case("CHANNELREADY"))
-        {
-            return true;
+        Self::channel_state_name(state).eq_ignore_ascii_case("ChannelReady")
+    }
+
+    /// Poll until the peer channel reaches `ChannelReady`, or fail if Fiber drops it.
+    async fn wait_for_channel_ready(&self, peer_public_key: &str) -> Result<(), String> {
+        let peer_public_key = peer_public_key.trim();
+        let mut last_state = String::from("(none)");
+        let mut saw_channel = false;
+
+        for attempt in 0..45 {
+            let channels = self.list_channels().await.unwrap_or_default();
+            if let Some(ch) = channels.iter().find(|c| {
+                c.peer_pubkey
+                    .as_deref()
+                    .is_some_and(|pk| pk.eq_ignore_ascii_case(peer_public_key))
+            }) {
+                saw_channel = true;
+                last_state = if ch.state_name.is_empty() {
+                    "(unknown)".to_string()
+                } else {
+                    ch.state_name.clone()
+                };
+                if last_state.eq_ignore_ascii_case("ChannelReady") {
+                    return Ok(());
+                }
+            } else if saw_channel {
+                return Err(format!(
+                    "Channel vanished from FNN while in {last_state}. \
+                     On CKB testnet this almost always means the funding TX never landed \
+                     (empty L1 funding lock, or peer went offline). Fund the FA ckt1 address \
+                     via faucet.nervos.org, keep both FAs online, then retry Open channel."
+                ));
+            } else if attempt >= 5 {
+                return Err(
+                    "open_channel returned OK but no channel appeared in list_channels. \
+                     Check FNN logs and L1 funding balance, then Refresh."
+                        .to_string(),
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
-        if state.get("ChannelReady").is_some() {
-            return true;
-        }
-        state
-            .get("state_name")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("ChannelReady"))
+
+        Err(format!(
+            "Timed out waiting for ChannelReady (last state: {last_state}). \
+             Pending Fiber channels are not durable — Refresh can show 0 until funding \
+             completes on CKB testnet. Fund L1 if needed and keep both peers connected."
+        ))
     }
 
     pub(crate) fn pubkey_to_peer_stub(pubkey: &str) -> u16 {
@@ -525,6 +647,7 @@ impl LiveFnnClient {
                 remote_capacities =
                     Self::merge_native_capacity(remote_capacities, remote_native, "remote");
 
+                let state_name = Self::channel_state_name(&ch.state);
                 MeshChannelState {
                     peer_id,
                     nonce: 1,
@@ -534,6 +657,7 @@ impl LiveFnnClient {
                     channel_id: ch.channel_id,
                     local_balance_shannons: local_native,
                     remote_balance_shannons: remote_native,
+                    state_name,
                     local_capacities,
                     remote_capacities,
                 }
@@ -603,6 +727,7 @@ impl SimulatedFnnClient {
                     channel_id: Some(format!("sim-channel-{agent_id}-{peer_id}")),
                     local_balance_shannons,
                     remote_balance_shannons,
+                    state_name: "ChannelReady".to_string(),
                     local_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, local_balance_shannons)],
                     remote_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, remote_balance_shannons)],
                 }
@@ -722,11 +847,20 @@ impl FiberNodeRpc for SimulatedFnnClient {
         Ok(agent_fnn_pubkey(self.agent_id))
     }
 
-    async fn connect_peer(&self, _peer_public_key: &str) -> Result<(), String> {
+    async fn connect_peer(
+        &self,
+        _peer_public_key: &str,
+        _peer_address: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
 
-    async fn open_channel(&self, peer_public_key: &str, _amount: u64) -> Result<(), String> {
+    async fn open_channel(
+        &self,
+        peer_public_key: &str,
+        _amount: u64,
+        _peer_address: Option<&str>,
+    ) -> Result<(), String> {
         let peer_id = peer_id_from_agent_pubkey(peer_public_key)
             .unwrap_or_else(|| LiveFnnClient::pubkey_to_peer_stub(peer_public_key));
 
@@ -749,6 +883,7 @@ impl FiberNodeRpc for SimulatedFnnClient {
             channel_id: Some(format!("sim-channel-{}-{peer_id}", self.agent_id)),
             local_balance_shannons,
             remote_balance_shannons,
+            state_name: "ChannelReady".to_string(),
             local_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, local_balance_shannons)],
             remote_capacities: vec![AssetCapacity::new(L2Asset::CkbNative, remote_balance_shannons)],
         });
@@ -764,6 +899,18 @@ impl FiberNodeRpc for SimulatedFnnClient {
             channel.is_active = false;
         }
         Ok(())
+    }
+
+    async fn close_channel_by_id(&self, channel_id: &str, _force: bool) -> Result<(), String> {
+        let mut channels = self.channels.write().await;
+        if let Some(channel) = channels
+            .iter_mut()
+            .find(|c| c.channel_id.as_deref() == Some(channel_id))
+        {
+            channel.is_active = false;
+            return Ok(());
+        }
+        Err(format!("no simulated channel_id {channel_id}"))
     }
 
     async fn send_keysend_payment(
@@ -873,20 +1020,60 @@ impl FiberNodeRpc for LiveFnnClient {
         Ok(info.pubkey)
     }
 
-    async fn connect_peer(&self, peer_public_key: &str) -> Result<(), String> {
-        self.call_rpc(
-            "connect_peer",
-            serde_json::json!([{
-                "pubkey": peer_public_key,
-                "save": true
-            }]),
-        )
-        .await?;
+    async fn connect_peer(
+        &self,
+        peer_public_key: &str,
+        peer_address: Option<&str>,
+    ) -> Result<(), String> {
+        let mut params = serde_json::json!({
+            "pubkey": peer_public_key,
+            "save": true
+        });
+        if let Some(address) = peer_address.map(str::trim).filter(|a| !a.is_empty()) {
+            // Prefer explicit address for cross-machine FAs (pubkey-only needs graph data).
+            params["address"] = serde_json::json!(address);
+        }
+        self.call_rpc("connect_peer", serde_json::json!([params]))
+            .await?;
         Ok(())
     }
 
-    async fn open_channel(&self, peer_public_key: &str, amount: u64) -> Result<(), String> {
-        let _ = self.connect_peer(peer_public_key).await;
+    async fn open_channel(
+        &self,
+        peer_public_key: &str,
+        amount: u64,
+        peer_address: Option<&str>,
+    ) -> Result<(), String> {
+        self.connect_peer(peer_public_key, peer_address)
+            .await
+            .map_err(|err| {
+                format!(
+                    "connect_peer failed before open_channel: {err}. \
+                     Peer announce must be a reachable multiaddr (not another machine's 127.0.0.1)."
+                )
+            })?;
+
+        // Fiber requires the peer session to be established before open_channel.
+        let mut connected = false;
+        for _ in 0..12 {
+            if self.peer_is_connected(peer_public_key).await.unwrap_or(false) {
+                connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        if !connected {
+            let hint = peer_address
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty())
+                .unwrap_or_else(|| "(no peer address from MFA)".to_string());
+            return Err(format!(
+                "Peer still not connected after connect_peer (address={hint}). \
+                 On the remote FA set FIBER_ANNOUNCE_ADDR=/ip4/<its-LAN-IP>/tcp/8228, \
+                 allow TCP 8228 through the firewall, restart that FA, Refresh Channels, then retry."
+            ));
+        }
+
         self.call_rpc(
             "open_channel",
             serde_json::json!([{
@@ -896,6 +1083,11 @@ impl FiberNodeRpc for LiveFnnClient {
             }]),
         )
         .await?;
+
+        // Real testnet opens must leave NegotiatingFunding and reach ChannelReady.
+        // Without L1 CKB (or if the peer drops), Fiber abandons the pending channel
+        // and list_channels goes empty — which looks like "refresh cleared my channel".
+        LiveFnnClient::wait_for_channel_ready(self, peer_public_key).await?;
         Ok(())
     }
 
@@ -906,7 +1098,10 @@ impl FiberNodeRpc for LiveFnnClient {
             .find(|c| c.peer_pubkey.as_deref() == Some(peer_public_key))
             .and_then(|c| c.channel_id.clone())
             .ok_or_else(|| format!("no channel_id for pubkey {peer_public_key}"))?;
+        self.close_channel_by_id(&channel_id, force).await
+    }
 
+    async fn close_channel_by_id(&self, channel_id: &str, force: bool) -> Result<(), String> {
         self.call_rpc(
             "shutdown_channel",
             serde_json::json!([{
@@ -1100,7 +1295,7 @@ mod tests {
                 .any(|c| c.peer_id == peer_id && !c.is_active)
         );
 
-        client.open_channel(&pubkey, 1).await.unwrap();
+        client.open_channel(&pubkey, 1, None).await.unwrap();
         assert!(
             client
                 .list_channels()

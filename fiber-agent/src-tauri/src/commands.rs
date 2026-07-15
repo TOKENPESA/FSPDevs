@@ -32,7 +32,7 @@ pub struct FnnBootStatus {
     pub error: Option<String>,
 }
 
-fn require_host_arc(host: &OptionalSidecarHost) -> Result<Arc<TokioMutex<SidecarHost>>, String> {
+pub(crate) fn require_host_arc(host: &OptionalSidecarHost) -> Result<Arc<TokioMutex<SidecarHost>>, String> {
     host.as_ref()
         .cloned()
         .ok_or_else(|| FNN_FATAL_BOOT_MESSAGE.to_string())

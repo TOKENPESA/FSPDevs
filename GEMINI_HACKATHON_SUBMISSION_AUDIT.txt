@@ -1,0 +1,295 @@
+================================================================================
+GEMINI AUDIT PACK — Fiber Network Hackathon Submission Form (TOKENPESA / FSPDevs)
+Date: 2026-07-15
+Git: origin/main @ 80f19f1 — "Ship desktop FNN bundle with hard-fail boot and absolute TokenPesa state."
+================================================================================
+
+PURPOSE
+-------
+Use this file (plus optional zip of fiber-agent / deploy / MFA slices) so Gemini can
+AUTHOR, VERIFY, and REFINE answers to the Fiber Network hackathon submission form.
+
+Gemini: treat facts below as ground truth for the submission. Prefer Category 2.
+Do NOT invent Android APK shipping or silent simulate-as-testnet. Write in clear
+operator English suitable for judges. Keep each answer scannable (bullets OK).
+
+
+FORM FIELDS TO PRODUCE
+----------------------
+1) Submission category (exactly ONE of 1 / 2 / 3)
+2) Project overview
+3) What problem does it solve? (must relate to Fiber Network infrastructure)
+4) System design (user + developer flows)
+5) Setup environment
+6) Tooling (CKB / Fiber scripts, tooling, SDKs)
+7) Current functionality (detailed)
+8) Future functionality (beyond hackathon)
+
+
+================================================================================
+0) RECOMMENDED CATEGORY (DEFAULT FOR ALL ANSWERS)
+================================================================================
+
+SELECT ONLY ONE:
+
+  ★ Category 2: Node, Routing, Cross-Chain, and Diagnostics Infrastructure
+
+Rationale for judges:
+  - Bundles Fiber Network Node (FNN) inside Windows NSIS installer (Tauri externalBin)
+  - Edge FA-N ↔ MFA control plane ↔ Treasury Hub FA-1 + FNN mesh topology
+  - Live Fiber JSON-RPC payments/channels; Dijkstra/mesh routing layers in mesh-core
+  - Fleet diagnostics: signed MFA telemetry, fatal FNN boot gate, console health UI
+  - CKB L1 tip verification via Hub :8114 façade → testnet.ckbapp.dev
+
+Why NOT Category 1 as primary:
+  Wallet/UX exists (JoyID funding, operator console) but is packaging around node/
+  fleet infra — not a consumer wallet product.
+
+Why NOT Category 3 as primary:
+  Merchant / DiCoBa / float modules exist as modules, but the differentiating
+  hackathon claim is Fiber node + routing + diagnostics fleet infrastructure.
+  Mention Category 3 themes only as adjacent modules under Current/Future.
+
+
+================================================================================
+1) FACT BASE — DEPLOY / IDENTITY (do not invent conflicting numbers)
+================================================================================
+
+MFA (control plane):
+  Host:     mfa.fsprotocol.com
+  IP:       167.99.150.153
+  Role:     master_fiber_agent — register FA-N, WSS control, telemetry
+
+Treasury Hub:
+  IP:       134.122.120.65
+  Role:     fiber-agent-daemon FA-1 + Linux FNN
+  P2P:      :8228
+  FNN RPC:  loopback 127.0.0.1:18227, nginx :8227 (MFA IP allowlist)
+  CKB L1:   public nginx proxy :8114 / :8116 → https://testnet.ckbapp.dev/
+            (verified get_tip_block_number returns advancing tip)
+
+Windows Sidecar (edge device):
+  Product:  Fiber Agent (Tauri 2)
+  Installer: fiber-agent/src-tauri/target/release/bundle/nsis/
+             Fiber Agent_1.0.0_x64-setup.exe
+  App exe:   fiber_agent_desktop.exe
+  Bundled:  binaries/fnn → fnn-x86_64-pc-windows-msvc.exe
+  Local RPC: 127.0.0.1:8227
+  State:    %APPDATA%\TokenPesa\state\  (SQLite + FNN data under …\state\fnn)
+  CKB RPC default for spawned FNN: http://134.122.120.65:8114
+  MFA:      auto-register → agent_identity.db; WSS with HMAC headers
+
+
+================================================================================
+2) FACT BASE — KEY CODE / CONFIG PATHS (cite when useful)
+================================================================================
+
+Tauri bundle FNN:
+  fiber-agent/src-tauri/tauri.conf.json          externalBin: ["binaries/fnn"]
+  fiber-agent/src-tauri/binaries/README.md
+  fiber-agent/scripts/prepare-fnn-sidecar.ps1
+  fiber-agent/src-tauri/src/fnn_sidecar.rs       spawn + Treasury CKB + localhost RPC
+  fiber-agent/src-tauri/capabilities/default.json shell spawn for binaries/fnn
+
+Absolute state:
+  fiber-agent/src/storage.rs                     resolve_agent_state_dir (dirs::data_dir)
+  fiber-agent/src/daemon.rs                      resolve_runtime_state_dir / identity
+
+Hard-fail live FNN:
+  fiber-agent/src/lib.rs                         resolve_fnn_backend + FnnError
+  fiber-agent/src/fnn_client.rs                  LiveFnnClient::ping (node_info)
+  fiber-agent/src-tauri/frontend/js/fnn-fatal.js fatal undismissible UI
+
+MFA / mesh:
+  fiber-agent/src/mfa_ws_auth.rs                 TLS MFA defaults
+  fiber-agent/src/daemon.rs                      ensure_agent_identity, telemetry, WS
+  master-fiber-agent/                            MFA supervisor
+
+Hub CKB proxy:
+  deploy/droplet/nginx/ckb-rpc-proxy.conf
+  deploy/droplet/nginx-ckb-rpc-proxy.sh
+  deploy/droplet/fnn-testnet-hub.config.yml      ckb.rpc_url: testnet.ckbapp.dev
+
+Fiber scripts (testnet FundingLock / CommitmentLock):
+  fnn-testnet/config/testnet/config.yml
+  deploy/droplet/fnn-testnet-hub.config.yml
+
+
+================================================================================
+3) DRAFT ANSWERS — COPY / REFINE FOR THE FORM
+================================================================================
+
+----- FIELD 1: Submission category -----
+
+Category 2: Node, Routing, Cross-Chain, and Diagnostics Infrastructure
+
+
+----- FIELD 2: Project overview -----
+
+TOKENPESA / FSPDevs Fiber Agent is a device-shippable Fiber Network edge stack:
+a Windows desktop Sidecar (Tauri) that auto-registers to an MFA fleet control
+plane, bundles a Fiber Network Node (FNN), and gives field operators a console
+for channels, Fiber testnet payments, DiCoBa savings modules, and diagnostics.
+
+Target audience: retail/field agents, merchant operators, and infra operators
+who need a installable Fiber edge node + MFA-supervised fleet identity — not
+raw FNN CLI alone.
+
+
+----- FIELD 3: What problem does it solve? -----
+
+Fiber Network participation usually requires juggling: node binaries, CKB L1 RPC,
+channel funding, agent identity, and operator UX — easy to leave L1 “demo”
+bookkeeping that looks like settlement.
+
+FSPDevs solves the edge deployment gap for Fiber infrastructure by:
+  • Packaging FNN inside the Windows installer (Tauri externalBin)
+  • Binding Fiber JSON-RPC strictly to localhost (:8227) while verifying L1 via
+    the Treasury Hub CKB façade (:8114)
+  • Issuing MFA FA-N identities and keeping signed telemetry / control WSS live
+  • Routing SQLite + node state to %APPDATA%\TokenPesa\state (installer-safe)
+  • Hard-failing when live FNN is unreachable (no silent SimulatedFnnClient on
+    testnet mode)
+
+Relation to Fiber Network: we are an edge+hub Fiber node fleet with routing/
+payment execution over FNN RPC and Fiber P2P to the Treasury Hub, plus operator
+diagnostics — not a separate L1 token project.
+
+
+----- FIELD 4: System design -----
+
+Topology:
+  [Windows Sidecar FA-N + bundled FNN :8227]
+           | HTTPS / WSS (HMAC)
+           v
+  [MFA mfa.fsprotocol.com — register, control, telemetry]
+           ^
+           | Fiber P2P / channel mesh
+  [Treasury Hub FA-1 + Linux FNN :8228]
+           |
+           v
+  [CKB testnet L1 via Hub :8114 → testnet.ckbapp.dev]
+
+Important USER flows:
+  1. Install NSIS → app boots FNN → MFA auto-register → FA-N visible on MFA
+  2. Fund address (JoyID/faucet UI) → open/monitor channels → send_payment
+  3. Operate DiCoBa / cash / OOB QR modules when mounted
+  4. If FNN fails port 8227 → fatal gate (truthful live mode)
+
+Important DEVELOPER / OPS flows:
+  1. npm run prepare:fnn-sidecar → npm run tauri:build → NSIS artifact
+  2. Override via FIBER_AGENT_STATE_DIR, CKB_NODE_RPC_URL, FNN_MODE=simulate
+     (simulate is explicit demo only)
+  3. Hub: deploy/droplet scripts — FNN systemd + nginx CKB/FNN RPC façades
+  4. Probe L1: POST get_tip_block_number to http://134.122.120.65:8114
+
+
+----- FIELD 5: Setup environment -----
+
+Local / ship environment (Windows edge):
+  • OS: Windows 10/11 x64
+  • Rust stable + MSVC (x86_64-pc-windows-msvc)
+  • Node.js + npm (@tauri-apps/cli v2)
+  • WebView2 (Tauri desktop)
+  • Bundled FNN Windows release binary
+  • SQLite (rusqlite) under %APPDATA%\TokenPesa\state
+  • Defaults: FNN_MODE=testnet, MFA_HOST=mfa.fsprotocol.com (TLS)
+
+Hub / MFA environment (Linux droplets):
+  • Ubuntu/Debian, systemd, nginx
+  • Linux FNN + fiber-agent-daemon (Hub)
+  • master_fiber_agent (MFA)
+  • CKB JSON-RPC reverse proxy (not a full local CKB sync node)
+
+
+----- FIELD 6: Tooling -----
+
+Fiber / CKB:
+  • Fiber Network Node (fnn) v0.8.x — JSON-RPC client LiveFnnClient
+    (node_info, list_channels, open_channel, send_payment, …)
+  • Fiber testnet chain scripts in config.yml — FundingLock / CommitmentLock
+    (cell deps from nervosnetwork/fiber-scripts testnet migrations)
+  • CKB JSON-RPC — get_tip_block_number and related via Hub proxy or
+    https://testnet.ckbapp.dev/
+  • JoyID web SDK / faucet integrations inside Sidecar WebView CSP allowlist
+
+App / ops tooling:
+  • Tauri 2 (externalBin sidecar packaging, shell plugin spawn)
+  • Rust crates: tokio, axum (module API), secp256k1, rusqlite, dirs, reqwest
+  • PowerShell: fnn-testnet/*, prepare-fnn-sidecar.ps1, droplet remote bootstrap
+  • No custom on-chain contract compiler SDK beyond Fiber’s published scripts
+
+
+----- FIELD 7: Current functionality -----
+
+Windows device ship:
+  • NSIS installer “Fiber Agent_1.0.0_x64-setup.exe” with bundled FNN
+  • On boot: spawn FNN with --ckb-node-rpc-url Hub:8114 and
+    --rpc-listening-addr 127.0.0.1:8227; data under TokenPesa\state\fnn
+  • MFA auto-registration when no token; persist FA-N + secret; control WSS
+  • resolve_fnn_backend: ping live node or panic / fatal UI (simulate only if
+    FNN_MODE=simulate|sim)
+
+Fiber operations (via LiveFnnClient + console):
+  • node_info / channel list / peer connect / open_channel / payments path
+  • Operator UI: dashboard, funding (JoyID), DiCoBa, cash desk, OOB QR, module
+    install/toggle hot-swap
+
+Infrastructure already live:
+  • MFA at mfa.fsprotocol.com
+  • Treasury Hub FNN + FA-1
+  • Public CKB tip RPC on Treasury :8114 (nginx → testnet.ckbapp.dev)
+
+Honesty constraints already enforced:
+  • Absolute AppData state (no Program Files-relative .fiber-agent DBs)
+  • No silent simulate fallback while operators believe they are on testnet
+
+
+----- FIELD 8: Future functionality -----
+
+  • Android Sidecar as MFA remote console (on-device FNN not short-term realistic)
+  • First-run channel open + liquidity wizard for retail agents
+  • Hardened public /api/register (rate limits, attestation, invite codes)
+  • Fleet watchtower / channel-health diagnostics dashboard
+  • Merchant LSP-style liquidity desk + multi-asset / UDT expansion (Category 3)
+  • Production key custody (no ship-time dev keys), code signing, auto-update
+  • Authenticated remote FNN gateway for thin clients
+  • Broader cross-chain / trampoline routing beyond single-Hub testnet topology
+
+
+================================================================================
+4) GEMINI INSTRUCTIONS
+================================================================================
+
+1. Confirm Category 2 unless the user explicitly forces Category 1 or 3.
+2. Produce answers for fields 1–8 ready to paste into the submission form.
+3. Keep technical claims consistent with FACT BASE (§1–§2). If uncertain, say
+   “implemented in tree / live on droplets” vs “planned”.
+4. Do not claim:
+   - Android APK already shipping
+   - Full local CKB node synced on Treasury (it is an HTTPS RPC proxy)
+   - Silent simulate under FNN_MODE=testnet (removed as of 80f19f1)
+5. Optional: add a 5-bullet “Why judges should pick this” appendix after §8.
+6. Output format: markdown with headings matching form fields 1–8.
+
+
+================================================================================
+5) QUICK EVIDENCE COMMANDS (optional for operators / Gemini prose)
+================================================================================
+
+Prepare FNN sidecar + build:
+  cd fiber-agent
+  npm run prepare:fnn-sidecar
+  npm run tauri:build
+
+Probe Hub CKB L1 façade (PowerShell):
+  $body = @{ id=1; jsonrpc="2.0"; method="get_tip_block_number"; params=@() } | ConvertTo-Json
+  Invoke-RestMethod -Uri "http://134.122.120.65:8114" -Method Post -Body $body -ContentType "application/json"
+
+State dir (Windows):
+  %APPDATA%\TokenPesa\state\
+
+
+================================================================================
+END — GEMINI_HACKATHON_SUBMISSION_AUDIT.txt
+================================================================================

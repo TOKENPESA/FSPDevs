@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Fiber Sidecar Operations Console",
         "width": 1280,
         "height": 720

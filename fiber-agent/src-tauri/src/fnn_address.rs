@@ -1,14 +1,12 @@
-use std::sync::Arc;
-
 use bech32::{self, ToBase32, Variant};
 use fiber_agent::fnn_client::LiveFnnClient;
 use fiber_agent::mesh_ports::resolve_fnn_rpc_url;
-use fiber_agent::module_host::SidecarHost;
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tauri::State;
-use tokio::sync::Mutex as TokioMutex;
+
+use crate::commands::{require_host_arc, OptionalSidecarHost};
 
 /// Testnet SECP256K1_BLAKE160 code hash (CKB system script).
 const TESTNET_SECP256K1_BLAKE160_CODE_HASH: &str =
@@ -104,8 +102,9 @@ pub struct FnnAddressSnapshot {
 
 #[tauri::command]
 pub async fn get_fnn_address(
-    host: State<'_, Arc<TokioMutex<SidecarHost>>>,
+    host: State<'_, OptionalSidecarHost>,
 ) -> Result<FnnAddressSnapshot, String> {
+    let host = require_host_arc(host.inner())?;
     let agent_id = host.lock().await.agent_id;
     let fnn_mode = std::env::var("FNN_MODE").unwrap_or_else(|_| "testnet".to_string());
     let is_live =

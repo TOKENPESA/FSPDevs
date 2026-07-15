@@ -15,7 +15,8 @@ use fiber_agent::spawn_sidecar_mfa_control_ws;
 use fiber_agent::storage::AgentDb;
 use fiber_agent::{MfaControlBus, SidecarConfig, FNN_FATAL_BOOT_MESSAGE};
 use fnn_sidecar::BundledFnnProcess;
-use tauri::Manager;
+use tauri::webview::{NewWindowResponse, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl};
 use tokio::sync::Mutex as TokioMutex;
 use commands::{
     calculate_invoice_preview, dispatch_to_module, execute_cash_in_transaction,
@@ -157,16 +158,32 @@ pub fn run() {
             app.manage(Arc::new(boot_status));
             app.manage(Arc::new(HardwareProfileState::from_env()));
 
+            // Build the main window here so JoyID `window.open` popups are allowed.
+            // Tauri 2 blocks new windows unless `on_new_window` returns Allow/Create.
             let window_label = format!("main-fa-{agent_id}");
-            if let Some(window) = app
-                .get_webview_window(&window_label)
-                .or_else(|| app.get_webview_window("main"))
-            {
-                let _ = window.set_title(&format!(
-                    "Fiber Sidecar - {}",
-                    identity.agent_id_label
-                ));
-            }
+            let title = format!("Fiber Sidecar - {}", identity.agent_id_label);
+            WebviewWindowBuilder::new(app, &window_label, WebviewUrl::App("index.html".into()))
+                .title(&title)
+                .inner_size(1280.0, 720.0)
+                .on_new_window(move |url, _features| {
+                    let raw = url.as_str();
+                    let host = url.host_str().unwrap_or("");
+                    let allow = raw.is_empty()
+                        || raw.starts_with("about:blank")
+                        || host.ends_with("joyid.dev")
+                        || host.ends_with(".joy.id")
+                        || host == "app.joy.id"
+                        || host.ends_with("joy.id");
+                    if allow {
+                        log::info!("[webview] allowing JoyID/auth popup: {raw}");
+                        NewWindowResponse::Allow
+                    } else {
+                        log::warn!("[webview] denying popup: {raw}");
+                        NewWindowResponse::Deny
+                    }
+                })
+                .build()
+                .map_err(|err| -> Box<dyn std::error::Error> { err.into() })?;
 
             Ok(())
         })

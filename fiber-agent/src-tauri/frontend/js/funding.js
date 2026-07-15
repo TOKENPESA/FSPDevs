@@ -215,6 +215,11 @@ async function connectJoyIdSigner(ccc, CkbSigner) {
   if (!CkbSigner) {
     throw new Error("JoyID SDK failed to load — check network / esm.sh");
   }
+  // JoyID opens about:blank then navigates to testnet.joyid.dev via window.open.
+  // In Tauri that requires on_new_window Allow (wired in Rust). Still surface a tip.
+  if (hasTauri()) {
+    log.info("JoyID connect: approve the Request Pop-up, then complete passkey in the JoyID window");
+  }
   const signer = new CkbSigner(client, APP_NAME, APP_ICON);
   if (!(await signer.isConnected())) {
     await signer.connect();
